@@ -1,0 +1,13 @@
+# Normalise text to LF in the repository. Without this, checking out on Windows
+# rewrites every file to CRLF and a fresh clone shows the whole tree as modified.
+* text=auto eol=lf
+
+# PowerShell is the exception: some Windows PowerShell hosts mis-parse LF-only
+# scripts, and this one has to run on a stock machine.
+*.ps1 text eol=crlf
+
+# Binary — never touch, and never diff as text.
+*.png binary
+*.ico binary
+*.exe binary
+*.7z binary

@@ -1,0 +1,30 @@
+node_modules/
+dist/
+out/
+build/
+
+# Playwright output
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Lifeline runtime data — machine-specific, never committed
+*.local.json
+config.local.json
+events.jsonl
+ledger.json
+hook.log
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*

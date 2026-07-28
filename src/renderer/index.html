@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <!-- No remote anything: the UI is fully local, so lock the CSP down. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self';"
+    />
+    <title>Claude Lifeline</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Custom title bar: the window is frameless for a modern look, so this
+         provides the drag region and window controls. -->
+    <header class="titlebar" id="titlebar">
+      <div class="titlebar-left">
+        <img id="brandIcon" class="brand-icon" alt="" />
+        <span class="brand">Claude Lifeline</span>
+        <span class="status-pill" id="statusPill">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="statusText">Starting…</span>
+        </span>
+      </div>
+      <div class="titlebar-right">
+        <button class="theme-toggle" id="themeToggle" title="Switch theme" aria-label="Switch theme">
+          <svg viewBox="0 0 24 24" class="icon-sun" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.5" />
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+          </svg>
+          <svg viewBox="0 0 24 24" class="icon-moon" aria-hidden="true">
+            <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" />
+          </svg>
+        </button>
+        <button class="win-btn" id="btnMin" aria-label="Minimise"><span class="win-min"></span></button>
+        <button class="win-btn" id="btnMax" aria-label="Maximise"><span class="win-max"></span></button>
+        <button class="win-btn win-close" id="btnClose" aria-label="Close to tray">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l10 10M11 1L1 11" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <nav class="sidebar">
+        <button class="nav-item active" data-tab="dashboard">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z" /></svg>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-tab="sessions">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
+          <span>Sessions</span>
+          <span class="nav-badge" id="badgeSessions"></span>
+        </button>
+        <button class="nav-item" data-tab="activity">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4" /></svg>
+          <span>Activity</span>
+          <span class="nav-badge attention" id="badgeAttention"></span>
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+          </svg>
+          <span>Settings</span>
+        </button>
+        <div class="sidebar-foot">
+          <button class="nav-item" data-tab="about">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
+            <span>About</span>
+          </button>
+        </div>
+      </nav>
+
+      <main class="content" id="content">
+        <!-- ============ DASHBOARD ============ -->
+        <section class="tab active" data-tab="dashboard">
+          <div class="page-head">
+            <div>
+              <h1>Dashboard</h1>
+              <p class="subtitle" id="dashSubtitle">Watching your Claude Code sessions.</p>
+            </div>
+            <button class="btn primary" id="btnToggleProtection">Pause protection</button>
+          </div>
+
+          <!-- Shown until the hooks are installed: without them nothing is
+               protected, so it is the most important thing on the page. -->
+          <div class="banner warn hidden" id="hookBanner">
+            <div class="banner-icon">!</div>
+            <div class="banner-body">
+              <strong>Recovery hooks are not installed yet</strong>
+              <span
+                >Lifeline resumes sessions through a Claude Code hook. Until it is installed, nothing is
+                protected.</span
+              >
+            </div>
+            <button class="btn primary" id="btnInstallHooks">Install now</button>
+          </div>
+
+          <div class="stat-grid">
+            <div class="stat-card">
+              <div class="stat-label">Live sessions</div>
+              <div class="stat-value" id="statLive">—</div>
+              <div class="stat-foot" id="statLiveFoot">&nbsp;</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Recovered today</div>
+              <div class="stat-value accent" id="statRecovered">—</div>
+              <div class="stat-foot" id="statRecoveredFoot">&nbsp;</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Needs attention</div>
+              <div class="stat-value warn" id="statAttention">—</div>
+              <div class="stat-foot" id="statAttentionFoot">&nbsp;</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Protection</div>
+              <div class="stat-value" id="statProtection">—</div>
+              <div class="stat-foot" id="statProtectionFoot">&nbsp;</div>
+            </div>
+          </div>
+
+          <div class="panel-row">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>Recent recoveries</h2>
+                <button class="btn ghost small" data-goto="activity">View all</button>
+              </div>
+              <div class="timeline" id="recentTimeline">
+                <div class="empty">
+                  <div class="empty-art">◌</div>
+                  <p>No recoveries yet — that is the good outcome.</p>
+                  <span>Anything Lifeline rescues will show up here.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>Coverage</h2></div>
+              <p class="panel-hint">
+                What Lifeline does for each way a turn can end. Transient failures resume automatically; failures a
+                retry cannot fix are reported instead, so the real cause is not buried under retries.
+              </p>
+              <div class="coverage" id="coverageList"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ SESSIONS ============ -->
+        <section class="tab" data-tab="sessions">
+          <div class="page-head">
+            <div>
+              <h1>Sessions</h1>
+              <p class="subtitle">Read live from Claude Code's own session records — nothing is attached to or altered.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="sessionTable">
+              <thead>
+                <tr>
+                  <th>Session</th>
+                  <th>Project</th>
+                  <th>State</th>
+                  <th>Last update</th>
+                  <th>PID</th>
+                </tr>
+              </thead>
+              <tbody id="sessionBody"></tbody>
+            </table>
+            <div class="empty hidden" id="sessionsEmpty">
+              <div class="empty-art">◌</div>
+              <p>No Claude Code sessions running.</p>
+              <span>Start one and it will appear here within a few seconds.</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ ACTIVITY ============ -->
+        <section class="tab" data-tab="activity">
+          <div class="page-head">
+            <div>
+              <h1>Activity</h1>
+              <p class="subtitle">Every recovery, skip, and block Lifeline has recorded.</p>
+            </div>
+            <div class="head-actions">
+              <select id="activityFilter" class="select">
+                <option value="all">All events</option>
+                <option value="recovered">Recoveries</option>
+                <option value="notified">Needs attention</option>
+                <option value="blocked">Blocked</option>
+                <option value="skipped">Skipped</option>
+              </select>
+              <button class="btn ghost" id="btnClearAttention">Acknowledge all</button>
+            </div>
+          </div>
+          <div class="timeline full" id="activityTimeline"></div>
+        </section>
+
+        <!-- ============ SETTINGS ============ -->
+        <section class="tab" data-tab="settings">
+          <div class="page-head">
+            <div>
+              <h1>Settings</h1>
+              <p class="subtitle">Changes save immediately and apply to the next failure.</p>
+            </div>
+            <button class="btn ghost" id="btnResetConfig">Reset to defaults</button>
+          </div>
+
+          <div class="settings-group">
+            <h2>Recovery features</h2>
+            <div class="toggle-list" id="featureToggles"></div>
+          </div>
+
+          <div class="settings-group">
+            <h2>Safety limits</h2>
+            <p class="group-hint">
+              These bounds are what make auto-resume safe: they stop a permanent failure from being retried forever.
+            </p>
+            <div class="field-grid" id="limitFields"></div>
+          </div>
+
+          <div class="settings-group">
+            <h2>Per-failure policy</h2>
+            <p class="group-hint">
+              Fine-grained control over each failure class Claude Code reports. Classes marked
+              <em>manual</em> are never auto-retried by default, because retrying them cannot succeed.
+            </p>
+            <div class="policy-list" id="policyList"></div>
+          </div>
+
+          <div class="settings-group">
+            <h2>Appearance</h2>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Theme</span>
+                <select class="select" id="themeSelect">
+                  <option value="system">Match Windows</option>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Accent</span>
+                <select class="select" id="accentSelect">
+                  <option value="violet">Violet</option>
+                  <option value="blue">Blue</option>
+                  <option value="emerald">Emerald</option>
+                  <option value="amber">Amber</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h2>Hooks</h2>
+            <div class="hook-status" id="hookStatus"></div>
+            <div class="row-actions">
+              <button class="btn primary" id="btnInstallHooks2">Install / repair hooks</button>
+              <button class="btn danger ghost" id="btnUninstallHooks">Remove hooks</button>
+              <button class="btn ghost" id="btnOpenSettings">Open settings.json</button>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h2>Advanced</h2>
+            <div class="toggle-list" id="advancedToggles"></div>
+            <div class="field-grid" id="advancedFields"></div>
+          </div>
+        </section>
+
+        <!-- ============ ABOUT ============ -->
+        <section class="tab" data-tab="about">
+          <div class="page-head">
+            <div>
+              <h1>About</h1>
+              <p class="subtitle">How Lifeline actually resumes a session.</p>
+            </div>
+          </div>
+          <div class="panel about-panel">
+            <h2>The mechanism</h2>
+            <p>
+              Claude Code fires a <code>StopFailure</code> event when an API error ends a turn, rather than the normal
+              <code>Stop</code>. Lifeline registers a hook on that event with <code>asyncRewake</code> enabled. When the
+              hook exits with code <strong>2</strong>, Claude Code injects the hook's message into the conversation and
+              wakes the model — so the session continues on its own.
+            </p>
+            <p>
+              Because that happens inside Claude Code's own process, recovery does not depend on this app. You can quit
+              the tray and every session stays protected.
+            </p>
+            <h2>Why some failures are not retried</h2>
+            <p>
+              A rate limit clears on its own, so waiting and resuming is the right move. An invalid API key or an
+              exhausted balance fails identically on every attempt — retrying those burns the attempt budget and buries
+              the one message that says what to fix. Those classes are reported instead.
+            </p>
+            <h2>Paths</h2>
+            <div class="kv" id="aboutPaths"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-host" id="toastHost"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
