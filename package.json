@@ -1,8 +1,8 @@
 {
   "name": "claude-lifeline",
   "productName": "Claude Lifeline",
-  "version": "1.1.0",
-  "description": "Keeps Claude Code sessions alive \u2014 detects API errors and other turn-ending failures, then resumes the session automatically.",
+  "version": "1.2.0",
+  "description": "Keeps Claude Code sessions alive — detects API errors and other turn-ending failures, then resumes the session automatically.",
   "main": "src/main/main.js",
   "author": "aelekes",
   "license": "MIT",
