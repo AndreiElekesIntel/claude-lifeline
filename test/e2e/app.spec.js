@@ -1064,6 +1064,35 @@ test('the about page reports live figures, not static copy', async () => {
   await expect(page.locator('#aboutFoot')).toContainText('Not affiliated with Anthropic');
 });
 
+test('the about page names the version it is actually running', async () => {
+  const sandbox = fx.makeSandbox('aboutversion');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="about"]');
+
+  // Compared against package.json rather than hardcoded, so a version bump does
+  // not break this test — what is being asserted is that the page reports the
+  // real version, not that the version is any particular string.
+  const pkg = require('../../package.json');
+  await expect(page.locator('#aboutChips')).toContainText(`v${pkg.version}`);
+
+  // And the build line carries the runtimes, which is what an issue report needs.
+  const build = page.locator('.about-build');
+  await expect(build).toContainText(`Claude Lifeline v${pkg.version}`);
+  await expect(build).toContainText('Electron ');
+  await expect(build).toContainText('Chromium ');
+  await expect(build).toContainText('Node ');
+
+  // Nothing may read as a literal 'undefined' — the failure mode of building this
+  // string from a state field that main forgot to send.
+  await expect(build).not.toContainText('undefined');
+  await expect(page.locator('#aboutChips')).not.toContainText('unknown');
+
+  // The version has to be selectable, because its whole purpose is being copied
+  // into a bug report — and the app sets `user-select: none` globally.
+  expect(await build.evaluate((n) => getComputedStyle(n).userSelect)).toBe('text');
+});
+
 test('the about recovery count agrees with the timeline, including recoveries older than the ledger keeps', async () => {
   const sandbox = fx.makeSandbox('aboutcount');
   const hour = 3_600_000;

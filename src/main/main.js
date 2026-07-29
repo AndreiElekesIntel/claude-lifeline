@@ -351,6 +351,24 @@ function serialisableState(state) {
         },
       };
     }),
+    /**
+     * What version of everything is actually running.
+     *
+     * From `app.getVersion()` rather than a `require` of package.json, because in
+     * a packaged build those are two different files: electron-builder writes the
+     * version into the app metadata, and a stale bundled package.json would have
+     * the About page confidently name a version the user is not running. The
+     * runtime versions come along because "which Electron" is the first question
+     * asked on any rendering bug report, and `schema` because a config written by
+     * a newer Lifeline is a real situation the app already warns about.
+     */
+    versions: {
+      app: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      schema: SCHEMA_VERSION,
+    },
     /** Model ids with built-in rates, so the UI can offer them for overriding. */
     pricingModels: Object.keys(RATES),
     /**

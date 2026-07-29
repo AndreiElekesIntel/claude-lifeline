@@ -1,15 +1,22 @@
 # Development
 
 ```bash
-npm test             # 153 unit tests
-npm run test:e2e     # 58 Playwright tests against the real Electron app
+npm test             # 172 unit tests
+npm run test:e2e     # 59 Playwright tests against the real Electron app
 npm run lint         # project-specific invariant checks
 npm run screenshots  # regenerate docs/screenshots/
+npm run wiki         # mirror docs/wiki/ to the GitHub wiki
 npm run dev          # run with devtools open
 npm run build        # installer + portable exe into dist/
 ```
 
 Tests redirect `LIFELINE_HOME` and `CLAUDE_CONFIG_DIR` to a throwaway directory and give each one its own Electron `--user-data-dir`, so a test run can never read your real sessions, rewrite your real `settings.json`, or collide with a tray app you have open.
+
+### A known flake in the full e2e run
+
+Roughly one full `npm run test:e2e` in three ends with a single test reporting `worker process exited unexpectedly (code=3221226505)`. That code is `0xC0000409` — an Electron process crashing, not an assertion failing, which is why the message carries no diff.
+
+It lands on a **different test each time** and every one of them passes when run alone or when its own spec file is run alone, so treat it as launch-churn from starting and tearing down ~60 Electron instances back to back rather than as a defect in whichever test got named. Re-run the file before investigating; if the *same* test fails twice in isolation, that is a real failure and this note does not apply.
 
 ## Layout
 

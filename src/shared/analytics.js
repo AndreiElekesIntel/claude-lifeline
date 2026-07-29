@@ -597,6 +597,18 @@ function report({ now = Date.now(), pricingOverrides = null, sessionLimit = 50 }
       assistantMessages: s.assistantMessages,
       tokens: s.tokens,
       costUsd: s.costUsd,
+      /**
+       * The worked spans, so a consumer can union them.
+       *
+       * Carried because the History tab totals a day across the sessions in it,
+       * and sessions overlap: adding up `activeMs` for three agents run at once
+       * reports three hours for one hour of wall clock. Only the intervals can
+       * answer "how long was I actually working that day".
+       *
+       * Rounded to whole seconds, which shrinks the JSON without changing any
+       * figure the UI renders — nothing here is displayed below minute precision.
+       */
+      intervals: (s.intervals || []).map(([a, b]) => [Math.round(a / 1000) * 1000, Math.round(b / 1000) * 1000]),
     })),
   };
 }
