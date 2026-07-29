@@ -23,6 +23,15 @@
         </span>
       </div>
       <div class="titlebar-right">
+        <!-- Opens in the system browser, never in-app: the renderer is CSP-locked
+             and has no business loading remote pages. -->
+        <button class="theme-toggle" id="btnGithub" data-link="repo" title="View source on GitHub" aria-label="View source on GitHub">
+          <svg viewBox="0 0 24 24" class="icon-github" aria-hidden="true">
+            <path
+              d="M12 1.5a10.5 10.5 0 0 0-3.32 20.47c.52.1.71-.23.71-.5v-1.75c-2.9.63-3.52-1.4-3.52-1.4-.47-1.21-1.16-1.53-1.16-1.53-.95-.65.07-.64.07-.64 1.05.08 1.6 1.08 1.6 1.08.93 1.6 2.45 1.14 3.05.87.09-.68.36-1.14.66-1.4-2.32-.27-4.76-1.16-4.76-5.16 0-1.14.4-2.07 1.07-2.8-.11-.27-.47-1.33.1-2.77 0 0 .87-.28 2.85 1.07a9.9 9.9 0 0 1 5.19 0c1.98-1.35 2.85-1.07 2.85-1.07.57 1.44.21 2.5.1 2.77.67.73 1.07 1.66 1.07 2.8 0 4.01-2.45 4.89-4.78 5.15.38.33.71.97.71 1.96v2.9c0 .28.19.61.72.5A10.5 10.5 0 0 0 12 1.5z"
+            />
+          </svg>
+        </button>
         <button class="theme-toggle" id="themeToggle" title="Switch theme" aria-label="Switch theme">
           <svg viewBox="0 0 24 24" class="icon-sun" aria-hidden="true">
             <circle cx="12" cy="12" r="4.5" />
@@ -50,6 +59,15 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
           <span>Sessions</span>
           <span class="nav-badge" id="badgeSessions"></span>
+        </button>
+        <button class="nav-item" data-tab="analytics">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
+          <span>Analytics</span>
+        </button>
+        <button class="nav-item" data-tab="coverage">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z" /><path d="M9 12l2 2 4-4" /></svg>
+          <span>Coverage</span>
+          <span class="nav-badge" id="badgeCoverage"></span>
         </button>
         <button class="nav-item" data-tab="activity">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4" /></svg>
@@ -134,13 +152,42 @@
               </div>
             </div>
 
-            <div class="panel">
-              <div class="panel-head"><h2>Coverage</h2></div>
-              <p class="panel-hint">
-                What Lifeline does for each way a turn can end. Transient failures resume automatically; failures a
-                retry cannot fix are reported instead, so the real cause is not buried under retries.
-              </p>
-              <div class="coverage" id="coverageList"></div>
+            <div class="side-stack">
+              <!-- Totals only. The full per-class breakdown lives on the
+                   Coverage tab; repeating all ten rows here crowded out the
+                   thing the dashboard is for. -->
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Coverage</h2>
+                  <button class="btn ghost small" data-goto="coverage">Configure</button>
+                </div>
+                <div class="cov-total" id="coverageTotals">
+                  <div class="cov-total-item">
+                    <span class="cov-total-num ok" id="covEnabled">—</span>
+                    <span class="cov-total-label">enabled</span>
+                  </div>
+                  <div class="cov-total-sep"></div>
+                  <div class="cov-total-item">
+                    <span class="cov-total-num" id="covDisabled">—</span>
+                    <span class="cov-total-label">disabled</span>
+                  </div>
+                </div>
+                <div class="cov-bar"><div class="cov-bar-fill" id="covBar"></div></div>
+                <p class="panel-hint tight" id="covSummaryHint">&nbsp;</p>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>This week</h2>
+                  <button class="btn ghost small" data-goto="analytics">Analytics</button>
+                </div>
+                <div class="mini-stats" id="dashWeek">
+                  <div class="mini-stat"><span class="mini-num" id="dashWeekHours">—</span><span class="mini-label">worked</span></div>
+                  <div class="mini-stat"><span class="mini-num" id="dashWeekSessions">—</span><span class="mini-label">sessions</span></div>
+                  <div class="mini-stat"><span class="mini-num" id="dashWeekCost">—</span><span class="mini-label">est. cost</span></div>
+                </div>
+                <p class="panel-hint tight" id="dashWeekHint">&nbsp;</p>
+              </div>
             </div>
           </div>
         </section>
@@ -171,6 +218,292 @@
               <p>No Claude Code sessions running.</p>
               <span>Start one and it will appear here within a few seconds.</span>
             </div>
+          </div>
+        </section>
+
+        <!-- ============ ANALYTICS ============ -->
+        <section class="tab" data-tab="analytics">
+          <div class="page-head">
+            <div>
+              <h1>Analytics</h1>
+              <p class="subtitle">
+                Time worked, sessions, and estimated spend, read from Claude Code's own transcripts. Read-only — nothing
+                is written back.
+              </p>
+            </div>
+            <div class="head-actions">
+              <select id="analyticsRange" class="select">
+                <option value="week">Past week</option>
+                <option value="month">Past month</option>
+                <option value="year">Past year</option>
+                <option value="all">All time</option>
+              </select>
+              <button class="btn ghost" id="btnRefreshAnalytics">Refresh</button>
+            </div>
+          </div>
+
+          <!-- Two sources, two views. "Your work" is derived from transcripts and
+               is the only one that knows time, cost, and projects; "Usage" is
+               Claude Code's own /usage data, which reaches further back. -->
+          <div class="segmented" id="analyticsViews" role="tablist">
+            <button class="seg-btn active" data-view="work" role="tab">Your work</button>
+            <button class="seg-btn" data-view="usage" role="tab">Usage &amp; models</button>
+          </div>
+
+          <!-- Analytics off, or nothing scanned yet. -->
+          <div class="banner hidden" id="analyticsOffBanner">
+            <div class="banner-icon">i</div>
+            <div class="banner-body">
+              <strong>Analytics is turned off</strong>
+              <span>Transcripts are not being read. Enable it under Settings → Analytics &amp; cost.</span>
+            </div>
+            <button class="btn primary" data-goto="settings">Open settings</button>
+          </div>
+
+          <div id="analyticsBody">
+            <div class="stat-grid">
+              <div class="stat-card">
+                <div class="stat-label">Time worked</div>
+                <div class="stat-value accent" id="anHours">—</div>
+                <div class="stat-foot" id="anHoursFoot">&nbsp;</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Sessions</div>
+                <div class="stat-value" id="anSessions">—</div>
+                <div class="stat-foot" id="anSessionsFoot">&nbsp;</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Estimated cost</div>
+                <div class="stat-value" id="anCost">—</div>
+                <div class="stat-foot" id="anCostFoot">&nbsp;</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Tokens</div>
+                <div class="stat-value" id="anTokens">—</div>
+                <div class="stat-foot" id="anTokensFoot">&nbsp;</div>
+              </div>
+            </div>
+
+            <!-- Cost is derived from token counts, never read from a bill. Said
+                 plainly here rather than in a tooltip, because a number that
+                 looks authoritative and is not is the failure mode. -->
+            <div class="note" id="estimateNote">
+              <strong>Cost is an estimate.</strong>
+              <span id="estimateNoteText"
+                >Claude Code records tokens, not money. These figures are tokens × published rate, so they will not match
+                a subscription bill. Rates are editable under Settings → Analytics &amp; cost.</span
+              >
+            </div>
+
+            <div class="panel-row wide-left">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2 id="chartTitle">Daily activity</h2>
+                  <span class="panel-tag" id="chartTag"></span>
+                </div>
+                <div class="chart" id="activityChart"></div>
+              </div>
+              <div class="panel">
+                <div class="panel-head"><h2>Busiest projects</h2></div>
+                <div class="bars" id="projectBars"></div>
+              </div>
+            </div>
+
+            <div class="panel" id="sessionHistoryPanel">
+              <div class="panel-head">
+                <h2>Session history</h2>
+                <span class="panel-tag" id="historyTag"></span>
+              </div>
+              <div class="table-wrap flush">
+                <table class="data-table" id="analyticsTable">
+                  <thead>
+                    <tr>
+                      <th>Session</th>
+                      <th>Project</th>
+                      <th>Worked</th>
+                      <th>Tokens</th>
+                      <th>Est. cost</th>
+                      <th>Ended</th>
+                    </tr>
+                  </thead>
+                  <tbody id="analyticsBodyRows"></tbody>
+                </table>
+                <div class="empty hidden" id="analyticsEmpty">
+                  <div class="empty-art">◌</div>
+                  <p>No sessions in this range.</p>
+                  <span>Work in Claude Code and it will show up here.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ---- Usage & models: Claude Code's own /usage statistics ---- -->
+          <div id="usageBody" class="hidden">
+            <div class="banner hidden" id="usageMissing">
+              <div class="banner-icon">i</div>
+              <div class="banner-body">
+                <strong>Claude Code has not written usage statistics yet</strong>
+                <span
+                  >Run <code>/usage</code> in any Claude Code session once, then refresh. Until then, the "Your work" view
+                  reads transcripts directly.</span
+                >
+              </div>
+            </div>
+
+            <div id="usageContent">
+              <div class="stat-grid">
+                <div class="stat-card">
+                  <div class="stat-label">Sessions all time</div>
+                  <div class="stat-value" id="usSessions">—</div>
+                  <div class="stat-foot" id="usSessionsFoot">&nbsp;</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Messages</div>
+                  <div class="stat-value" id="usMessages">—</div>
+                  <div class="stat-foot" id="usMessagesFoot">&nbsp;</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Tokens all time</div>
+                  <div class="stat-value accent" id="usTokens">—</div>
+                  <div class="stat-foot" id="usTokensFoot">&nbsp;</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Estimated cost</div>
+                  <div class="stat-value" id="usCost">—</div>
+                  <div class="stat-foot" id="usCostFoot">&nbsp;</div>
+                </div>
+              </div>
+
+              <div class="note" id="usageNote">
+                <strong>Source: Claude Code's own <code>/usage</code> data.</strong>
+                <span id="usageNoteText">&nbsp;</span>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>By model</h2>
+                  <span class="panel-tag" id="usModelTag"></span>
+                </div>
+                <div class="table-wrap flush">
+                  <table class="data-table" id="usModelTable">
+                    <thead>
+                      <tr>
+                        <th>Model</th>
+                        <th>Share of cost</th>
+                        <th>Input</th>
+                        <th>Output</th>
+                        <th>Cache read</th>
+                        <th>Est. cost</th>
+                      </tr>
+                    </thead>
+                    <tbody id="usModelBody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="panel-row wide-left">
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>Messages per day</h2>
+                    <span class="panel-tag" id="usDailyTag"></span>
+                  </div>
+                  <div class="chart" id="usDailyChart"></div>
+                </div>
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>When you work</h2>
+                    <span class="panel-tag" id="usHourTag"></span>
+                  </div>
+                  <div class="chart short" id="usHourChart"></div>
+                  <p class="panel-hint tight">Sessions started per hour of the day, across your whole history.</p>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="group-head">
+                  <div>
+                    <h2>Records</h2>
+                    <p class="group-hint">Milestones Claude Code tracks across every session on this machine.</p>
+                  </div>
+                </div>
+                <div class="hero-metrics flush" id="usRecords"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ COVERAGE ============ -->
+        <section class="tab" data-tab="coverage">
+          <div class="page-head">
+            <div>
+              <h1>Coverage</h1>
+              <p class="subtitle">
+                Every way a Claude Code turn can end, and what Lifeline does about it. Switch any of them off to be told
+                instead of rescued.
+              </p>
+            </div>
+            <div class="head-actions">
+              <button class="btn ghost" id="btnCoverageRecommended">Restore recommended</button>
+              <button class="btn ghost" id="btnCoverageAll">Enable all</button>
+            </div>
+          </div>
+
+          <div class="stat-grid">
+            <div class="stat-card">
+              <div class="stat-label">Auto-resumed</div>
+              <div class="stat-value ok" id="covStatEnabled">—</div>
+              <div class="stat-foot">recovered without you</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Alert only</div>
+              <div class="stat-value warn" id="covStatDisabled">—</div>
+              <div class="stat-foot">reported, never retried</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Recovery features</div>
+              <div class="stat-value" id="covStatFeatures">—</div>
+              <div class="stat-foot" id="covStatFeaturesFoot">&nbsp;</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Detection</div>
+              <div class="stat-value" id="covStatDetect">—</div>
+              <div class="stat-foot" id="covStatDetectFoot">&nbsp;</div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="group-head">
+              <div>
+                <h2>Failure classes</h2>
+                <p class="group-hint">
+                  These are Claude Code's own <code>StopFailure</code> classes. Transient ones resume automatically;
+                  the four marked <em>manual</em> cannot be fixed by a retry, so they alert you instead.
+                </p>
+              </div>
+            </div>
+            <div class="coverage-grid" id="coverageClasses"></div>
+          </div>
+
+          <div class="settings-group">
+            <div class="group-head">
+              <div>
+                <h2>Recovery behaviours</h2>
+                <p class="group-hint">Which kinds of trouble Lifeline acts on at all, beyond the API error classes above.</p>
+              </div>
+            </div>
+            <div class="toggle-list" id="coverageBehaviours"></div>
+          </div>
+
+          <div class="settings-group">
+            <div class="group-head">
+              <div>
+                <h2>Session watching</h2>
+                <p class="group-hint">
+                  Checks that run in this app rather than in the hook, so they only work while Lifeline is open.
+                </p>
+              </div>
+            </div>
+            <div class="toggle-list" id="coverageDetection"></div>
           </div>
         </section>
 
@@ -205,30 +538,105 @@
             <button class="btn ghost" id="btnResetConfig">Reset to defaults</button>
           </div>
 
-          <div class="settings-group">
-            <h2>Recovery features</h2>
-            <div class="toggle-list" id="featureToggles"></div>
+          <!-- Section jump list. The page is long by nature — one screen per
+               concern would hide the relationships between them — so the fix is
+               navigation, not fewer settings. -->
+          <div class="settings-nav" id="settingsNav"></div>
+
+          <div class="settings-group" id="setInstall">
+            <div class="group-head">
+              <div>
+                <h2>Installation</h2>
+                <p class="group-hint">
+                  Recovery runs inside Claude Code, through these hooks. Without them nothing is protected, whether or
+                  not this app is open.
+                </p>
+              </div>
+              <span class="group-chip" id="installChip"></span>
+            </div>
+            <div class="hook-status" id="hookStatus"></div>
+            <div class="row-actions">
+              <button class="btn primary" id="btnInstallHooks2">Install / repair hooks</button>
+              <button class="btn danger ghost" id="btnUninstallHooks">Remove hooks</button>
+              <button class="btn ghost" id="btnOpenSettings">Open settings.json</button>
+            </div>
           </div>
 
-          <div class="settings-group">
-            <h2>Safety limits</h2>
-            <p class="group-hint">
-              These bounds are what make auto-resume safe: they stop a permanent failure from being retried forever.
-            </p>
+          <div class="settings-group" id="setSafety">
+            <div class="group-head">
+              <div>
+                <h2>Safety limits</h2>
+                <p class="group-hint">
+                  What makes auto-resume safe to leave on: these bounds stop a permanent failure from being retried
+                  forever, and cap what a runaway loop can spend.
+                </p>
+              </div>
+            </div>
             <div class="field-grid" id="limitFields"></div>
           </div>
 
-          <div class="settings-group">
-            <h2>Per-failure policy</h2>
-            <p class="group-hint">
-              Fine-grained control over each failure class Claude Code reports. Classes marked
-              <em>manual</em> are never auto-retried by default, because retrying them cannot succeed.
-            </p>
+          <div class="settings-group" id="setPolicy">
+            <div class="group-head">
+              <div>
+                <h2>Per-failure tuning</h2>
+                <p class="group-hint">
+                  How long to wait and how many times to try, per failure class. To turn a class on or off, use
+                  <button class="link-btn" data-goto="coverage">Coverage</button>.
+                </p>
+              </div>
+            </div>
             <div class="policy-list" id="policyList"></div>
           </div>
 
-          <div class="settings-group">
-            <h2>Appearance</h2>
+          <div class="settings-group" id="setAnalytics">
+            <div class="group-head">
+              <div>
+                <h2>Analytics &amp; cost</h2>
+                <p class="group-hint">
+                  Reads transcripts to report time and spend. Cost is derived from token counts — Claude Code does not
+                  record money — so the rates below are editable.
+                </p>
+              </div>
+            </div>
+            <div class="toggle-list" id="analyticsToggles"></div>
+            <div class="field-grid" id="analyticsFields"></div>
+            <div class="rates-head">
+              <h3>Model rates <span class="muted">USD per million tokens</span></h3>
+              <button class="btn ghost small" id="btnResetRates">Reset rates</button>
+            </div>
+            <div class="table-wrap flush">
+              <table class="data-table compact" id="ratesTable">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Input</th>
+                    <th>Output</th>
+                    <th>Cache write</th>
+                    <th>Cache read</th>
+                  </tr>
+                </thead>
+                <tbody id="ratesBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="settings-group" id="setNotify">
+            <div class="group-head">
+              <div>
+                <h2>Notifications</h2>
+                <p class="group-hint">How Lifeline tells you something happened while you were elsewhere.</p>
+              </div>
+            </div>
+            <div class="toggle-list" id="notifyToggles"></div>
+          </div>
+
+          <div class="settings-group" id="setAppearance">
+            <div class="group-head">
+              <div>
+                <h2>Appearance</h2>
+                <p class="group-hint">Theme follows Windows by default, including when you switch it mid-session.</p>
+              </div>
+            </div>
             <div class="field-grid">
               <label class="field">
                 <span class="field-label">Theme</span>
@@ -248,54 +656,151 @@
                 </select>
               </label>
             </div>
+            <div class="toggle-list" id="windowToggles"></div>
           </div>
 
-          <div class="settings-group">
-            <h2>Hooks</h2>
-            <div class="hook-status" id="hookStatus"></div>
-            <div class="row-actions">
-              <button class="btn primary" id="btnInstallHooks2">Install / repair hooks</button>
-              <button class="btn danger ghost" id="btnUninstallHooks">Remove hooks</button>
-              <button class="btn ghost" id="btnOpenSettings">Open settings.json</button>
+          <div class="settings-group" id="setScope">
+            <div class="group-head">
+              <div>
+                <h2>Project scope</h2>
+                <p class="group-hint">
+                  Limit recovery to certain projects. One path per line, matched as a prefix. A denied path wins over an
+                  allowed one.
+                </p>
+              </div>
             </div>
+            <div class="field-grid" id="scopeFields"></div>
           </div>
 
-          <div class="settings-group">
-            <h2>Advanced</h2>
+          <div class="settings-group" id="setAdvanced">
+            <div class="group-head">
+              <div>
+                <h2>Advanced</h2>
+                <p class="group-hint">Diagnostics and storage. Safe to leave alone.</p>
+              </div>
+            </div>
             <div class="toggle-list" id="advancedToggles"></div>
             <div class="field-grid" id="advancedFields"></div>
+            <div class="row-actions">
+              <button class="btn ghost" id="btnOpenData">Open data folder</button>
+              <button class="btn ghost" id="btnOpenEvents">Open event log</button>
+              <button class="btn ghost" id="btnOpenConfig">Open config.json</button>
+            </div>
           </div>
         </section>
 
         <!-- ============ ABOUT ============ -->
         <section class="tab" data-tab="about">
-          <div class="page-head">
-            <div>
-              <h1>About</h1>
-              <p class="subtitle">How Lifeline actually resumes a session.</p>
+          <div class="hero">
+            <div class="hero-glow" aria-hidden="true"></div>
+            <div class="hero-main">
+              <img id="aboutIcon" class="hero-icon" alt="" />
+              <div class="hero-text">
+                <h1>Claude Lifeline</h1>
+                <p class="hero-tag">
+                  Keeps long Claude Code runs alive through API errors, dropped connections, and context overflow — from
+                  inside Claude Code itself.
+                </p>
+                <div class="hero-chips" id="aboutChips"></div>
+              </div>
+            </div>
+            <div class="hero-metrics" id="aboutMetrics"></div>
+          </div>
+
+          <div class="panel-row wide-left">
+            <div class="panel about-panel">
+              <div class="panel-head"><h2>How a session gets rescued</h2></div>
+              <ol class="steps" id="aboutSteps"></ol>
+            </div>
+
+            <div class="side-stack">
+              <div class="panel">
+                <div class="panel-head"><h2>Design rules</h2></div>
+                <div class="principles" id="aboutPrinciples"></div>
+              </div>
             </div>
           </div>
-          <div class="panel about-panel">
-            <h2>The mechanism</h2>
-            <p>
-              Claude Code fires a <code>StopFailure</code> event when an API error ends a turn, rather than the normal
-              <code>Stop</code>. Lifeline registers a hook on that event with <code>asyncRewake</code> enabled. When the
-              hook exits with code <strong>2</strong>, Claude Code injects the hook's message into the conversation and
-              wakes the model — so the session continues on its own.
-            </p>
-            <p>
-              Because that happens inside Claude Code's own process, recovery does not depend on this app. You can quit
-              the tray and every session stays protected.
-            </p>
-            <h2>Why some failures are not retried</h2>
-            <p>
-              A rate limit clears on its own, so waiting and resuming is the right move. An invalid API key or an
-              exhausted balance fails identically on every attempt — retrying those burns the attempt budget and buries
-              the one message that says what to fix. Those classes are reported instead.
-            </p>
-            <h2>Paths</h2>
-            <div class="kv" id="aboutPaths"></div>
+
+          <div class="settings-group">
+            <div class="group-head">
+              <div>
+                <h2>Why some failures are never retried</h2>
+                <p class="group-hint">
+                  A rate limit clears on its own, so waiting and resuming is right. A wrong API key fails identically
+                  every time — retrying it burns the attempt budget and buries the one message that says what to fix.
+                </p>
+              </div>
+            </div>
+            <div class="split-cards" id="aboutRetryCards"></div>
           </div>
+
+          <div class="settings-group">
+            <div class="group-head">
+              <div>
+                <h2>Files &amp; locations</h2>
+                <p class="group-hint">Everything Lifeline writes lives under your own profile. Click any row to open it.</p>
+              </div>
+            </div>
+            <div class="path-list" id="aboutPaths"></div>
+          </div>
+
+          <!-- Open source, and the About page is where someone goes looking for
+               that. Links open in the system browser, not in this window. -->
+          <div class="settings-group">
+            <div class="group-head">
+              <div>
+                <h2>Open source</h2>
+                <p class="group-hint">
+                  Claude Lifeline is MIT licensed and developed in the open. Read the code that watches your sessions,
+                  file an issue, or send a pull request.
+                </p>
+              </div>
+            </div>
+            <div class="repo-card">
+              <div class="repo-mark">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 1.5a10.5 10.5 0 0 0-3.32 20.47c.52.1.71-.23.71-.5v-1.75c-2.9.63-3.52-1.4-3.52-1.4-.47-1.21-1.16-1.53-1.16-1.53-.95-.65.07-.64.07-.64 1.05.08 1.6 1.08 1.6 1.08.93 1.6 2.45 1.14 3.05.87.09-.68.36-1.14.66-1.4-2.32-.27-4.76-1.16-4.76-5.16 0-1.14.4-2.07 1.07-2.8-.11-.27-.47-1.33.1-2.77 0 0 .87-.28 2.85 1.07a9.9 9.9 0 0 1 5.19 0c1.98-1.35 2.85-1.07 2.85-1.07.57 1.44.21 2.5.1 2.77.67.73 1.07 1.66 1.07 2.8 0 4.01-2.45 4.89-4.78 5.15.38.33.71.97.71 1.96v2.9c0 .28.19.61.72.5A10.5 10.5 0 0 0 12 1.5z"
+                  />
+                </svg>
+              </div>
+              <div class="repo-body">
+                <div class="repo-name">AndreiElekesIntel/claude-lifeline</div>
+                <p class="repo-desc">
+                  Nothing here phones home. Every number on the Analytics tab is computed on this machine from files
+                  Claude Code already wrote, and the app makes no network requests at all — the source is public so you
+                  can verify that rather than take our word for it.
+                </p>
+                <div class="repo-actions">
+                  <button class="btn primary" data-link="repo">View on GitHub</button>
+                  <button class="btn ghost" data-link="releases">Latest release</button>
+                  <button class="btn ghost" data-link="issues">Report an issue</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Worth stating plainly rather than burying in a commit log: the
+                 tool that keeps Claude Code running was itself written in it. -->
+            <div class="built-with">
+              <div class="built-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M12 2.6l2.7 5.9 6.4.7-4.8 4.3 1.3 6.3L12 16.6l-5.6 3.2 1.3-6.3-4.8-4.3 6.4-.7L12 2.6z"
+                  />
+                </svg>
+              </div>
+              <div class="built-body">
+                <div class="built-title">Built with Claude Opus 5 in Claude Code</div>
+                <p class="built-desc">
+                  Every line of this app — the recovery hook, the analytics engine, the tests, and this page — was
+                  written with <strong>Claude Opus 5</strong> inside <strong>Claude Code</strong>. Which makes it a tool
+                  built in the thing it protects: the failures it recovers from are ones it hit while being written.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="about-foot" id="aboutFoot"></div>
         </section>
       </main>
     </div>

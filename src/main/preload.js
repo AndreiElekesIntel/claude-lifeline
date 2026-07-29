@@ -13,10 +13,24 @@ contextBridge.exposeInMainWorld('lifeline', {
   getState: () => ipcRenderer.invoke('get-state'),
   saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
   resetConfig: () => ipcRenderer.invoke('reset-config'),
+  /** Clear model rate overrides. Separate because a merged patch cannot delete. */
+  resetRates: () => ipcRenderer.invoke('reset-rates'),
   installHooks: () => ipcRenderer.invoke('install-hooks'),
   uninstallHooks: () => ipcRenderer.invoke('uninstall-hooks'),
   clearAttention: () => ipcRenderer.invoke('clear-attention'),
   openPath: (which) => ipcRenderer.invoke('open-path', which),
+  /**
+   * Open one of Lifeline's own links in the system browser.
+   *
+   * Takes a key, not a URL: handing the renderer an open-anything channel would
+   * turn any injected string into a way to launch a browser at an attacker's
+   * address. Main owns the list (see LINKS in main.js).
+   */
+  openLink: (which) => ipcRenderer.invoke('open-link', which),
+  /** Free: whatever analytics already knows, with no scan. */
+  analyticsSnapshot: () => ipcRenderer.invoke('analytics-snapshot'),
+  /** May read every transcript on disk, so it is only called on demand. */
+  analyticsReport: (opts) => ipcRenderer.invoke('analytics-report', opts || {}),
 
   onState: (cb) => {
     const h = (_e, state) => cb(state);

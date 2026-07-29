@@ -120,6 +120,23 @@ for (const file of files.filter((f) => f.includes(`${path.sep}test${path.sep}`) 
   }
 }
 
+// 9. PowerShell scripts must be ASCII, or carry a UTF-8 BOM.
+//
+//    Windows PowerShell 5.1 — still the default `powershell` on Windows 11 —
+//    decodes a BOM-less .ps1 as ANSI. A single em-dash inside a double-quoted
+//    string then terminates the string early and the whole file fails to parse
+//    with "the string is missing the terminator", at the moment someone runs the
+//    installer. Cheap to check, and it has already happened once.
+for (const file of walk(path.join(root, 'scripts')).filter((f) => f.endsWith('.ps1'))) {
+  const raw = fs.readFileSync(file);
+  const hasBom = raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf;
+  const text = raw.toString('utf8').replace(/^﻿/, '');
+  const offenders = [...new Set([...text].filter((c) => c.charCodeAt(0) > 127))];
+  if (offenders.length && !hasBom) {
+    fail(file, `contains non-ASCII (${offenders.join(' ')}) but has no UTF-8 BOM — PowerShell 5.1 will misparse it`);
+  }
+}
+
 // Informational: flag stray debugging left behind in shipped code.
 for (const file of jsFiles.filter((f) => f.startsWith(path.join(root, 'src')))) {
   const src = fs.readFileSync(file, 'utf8');

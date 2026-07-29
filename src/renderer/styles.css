@@ -185,6 +185,10 @@ body, .panel, .stat-card, .titlebar, .sidebar { transition: background-color 0.2
 .theme-toggle .icon-moon { display: none; }
 [data-theme="light"] .theme-toggle .icon-sun { display: none; }
 [data-theme="light"] .theme-toggle .icon-moon { display: block; }
+/* The GitHub mark is a solid glyph, not a line drawing, so it opts out of the
+   shared stroke styling above. Sized a touch larger to match the stroked icons'
+   optical weight. */
+.theme-toggle .icon-github { width: 16px; height: 16px; fill: currentColor; stroke: none; }
 
 .win-btn {
   -webkit-app-region: no-drag;
@@ -327,7 +331,11 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 
 /* ---------- Panels ---------- */
 .panel-row { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; align-items: start; }
-@media (max-width: 1000px) { .panel-row { grid-template-columns: 1fr; } }
+/* The window's own minimum is 880px, but it can be narrower than the layout's
+   comfortable width, so both panel-row variants collapse together. */
+@media (max-width: 1000px) {
+  .panel-row, .panel-row.wide-left { grid-template-columns: 1fr; }
+}
 .panel {
   padding: 18px;
   background: var(--bg-elev);
@@ -383,32 +391,138 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .empty p { margin: 0; font-size: 13.5px; font-weight: 550; color: var(--text); }
 .empty span { display: block; margin-top: 3px; font-size: 12.5px; }
 
-/* ---------- Coverage ---------- */
-.coverage { display: flex; flex-direction: column; gap: 5px; }
-/* Fixed action column: a chip that reflows mid-phrase ("Waits, then / resumes")
-   reads as broken, and the whole point of this panel is legibility at a glance. */
-.cov-item {
-  display: grid;
-  grid-template-columns: 118px minmax(0, 1fr);
-  gap: 4px 12px;
-  align-items: baseline;
-  padding: 9px 11px;
+/* ---------- Coverage: dashboard widget (totals only) ---------- */
+.side-stack { display: flex; flex-direction: column; gap: 14px; }
+.panel-hint.tight { margin: 10px 0 0; }
+
+.cov-total { display: flex; align-items: center; gap: 18px; }
+.cov-total-item { display: flex; flex-direction: column; gap: 1px; }
+.cov-total-num { font-size: 30px; font-weight: 660; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.cov-total-num.ok { color: var(--ok); }
+.cov-total-label { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-faint); }
+.cov-total-sep { width: 1px; align-self: stretch; margin: 4px 0; background: var(--border); }
+
+.cov-bar { margin-top: 14px; height: 6px; border-radius: 99px; background: var(--bg-elev-2); border: 1px solid var(--border); overflow: hidden; }
+.cov-bar-fill { height: 100%; border-radius: 99px; background: var(--ok); transition: width 0.35s var(--ease); }
+
+/* ---------- Coverage tab: per-class cards ---------- */
+.coverage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 10px; }
+.cov-card {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 13px 14px;
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  transition: border-color 0.2s var(--ease);
 }
-.cov-item .chip {
-  justify-self: start;
-  grid-row: span 2;
-  align-self: center;
-  white-space: nowrap;
+/* The left edge carries the state, so a screenful of cards is scannable without
+   reading a single chip. */
+.cov-card[data-on="true"] { border-left-color: var(--ok); }
+.cov-card[data-on="false"] { border-left-color: var(--warn); }
+.cov-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.cov-card-titles { min-width: 0; }
+.cov-card-name { font-size: 13.5px; font-weight: 600; }
+.cov-card-key { display: block; margin-top: 2px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.cov-card-why { font-size: 12.5px; color: var(--text-dim); }
+.cov-card-foot { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.cov-card-num { font-size: 11.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.cov-card-blocked {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 8px 10px;
+  font-size: 11.5px; color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: var(--radius-sm);
 }
-.cov-name { font-weight: 550; }
-.cov-why { color: var(--text-faint); font-size: 11.5px; }
+.link-btn {
+  padding: 0; font: inherit; color: var(--accent-text); background: none; border: 0;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.link-btn:hover { filter: brightness(1.15); }
+.link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* ---------- Analytics ---------- */
+.mini-stats { display: flex; gap: 20px; flex-wrap: wrap; }
+.mini-stat { display: flex; flex-direction: column; gap: 1px; }
+.mini-num { font-size: 21px; font-weight: 640; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.mini-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-faint); }
+
+/* Cost here is derived, not billed. The note is a permanent part of the page
+   rather than a tooltip, because an authoritative-looking wrong number is the
+   failure mode worth designing against. */
+.note {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 11px 14px; margin-bottom: 14px;
+  font-size: 12.5px; color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-sm);
+}
+.note strong { color: var(--text); }
+.note.warn { border-left-color: var(--warn); }
+
+.panel-tag { font-size: 11.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.panel-row.wide-left { grid-template-columns: 1.6fr 1fr; }
+
+/* Two views of the same tab. A pill pair rather than a second nav level: the
+   choice is which *source* to read, not where you are in the app. */
+.segmented {
+  display: inline-flex; gap: 4px; padding: 4px;
+  margin-bottom: 18px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+}
+.seg-btn {
+  padding: 7px 16px;
+  font: inherit; font-size: 12.5px; font-weight: 550;
+  color: var(--text-dim);
+  background: transparent; border: 0; border-radius: 99px;
+  cursor: pointer;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active { color: var(--accent-text); background: var(--bg-elev); box-shadow: var(--shadow-sm); }
+.seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.chart { min-height: 190px; }
+.chart-bars { display: flex; align-items: flex-end; gap: 4px; height: 190px; }
+/* 24 hourly columns need to be narrower and shorter than 30 daily ones, or the
+   panel next to them grows to match. */
+.chart.short { min-height: 130px; }
+.chart.short .chart-bars { height: 130px; gap: 2px; }
+.chart-col { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 1; min-width: 0; height: 100%; }
+.chart-track { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.chart-bar {
+  width: 100%; min-height: 2px;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent));
+  transition: height 0.35s var(--ease);
+}
+.chart-bar.zero { background: var(--border); }
+.chart-val { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-label { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+.bars { display: flex; flex-direction: column; gap: 12px; }
+.bar-row { display: flex; flex-direction: column; gap: 4px; }
+.bar-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.bar-name { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-val { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar-track { height: 6px; border-radius: 99px; background: var(--bg-elev-2); border: 1px solid var(--border); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 99px; background: var(--accent); transition: width 0.35s var(--ease); }
+.bar-sub { font-size: 11px; color: var(--text-faint); }
+/* A bar inside a table cell: pinned to a fixed width so the model column keeps
+   the space it needs for a full model id. */
+.share-cell { width: 160px; min-width: 120px; }
+.share-cell .bar-track { margin-bottom: 3px; }
 
 /* ---------- Tables ---------- */
 .table-wrap { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+/* Inside a panel the wrapper's own frame would double the panel's border. */
+.table-wrap.flush { background: transparent; border: 0; box-shadow: none; border-radius: 0; }
+.table-wrap.flush .data-table th { background: transparent; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table th {
   padding: 11px 16px; text-align: left;
@@ -420,6 +534,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .data-table td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .data-table tbody tr:last-child td { border-bottom: 0; }
 .data-table tbody tr:hover { background: var(--bg-elev-2); }
+.data-table.compact th, .data-table.compact td { padding: 7px 10px; }
 .cell-main { font-weight: 550; }
 .cell-sub { font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); overflow-wrap: anywhere; }
 .mono { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
@@ -435,6 +550,57 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 }
 .settings-group > h2 { margin-bottom: 4px; }
 .group-hint { margin: 0 0 14px; font-size: 12.5px; color: var(--text-dim); max-width: 76ch; }
+.group-hint:last-child { margin-bottom: 0; }
+.group-hint code { padding: 1px 5px; font-family: var(--mono); font-size: 11.5px; background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 4px; }
+
+/* Title row: heading and hint on the left, state on the right. Keeps the group's
+   status visible without scrolling into its controls. */
+.group-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.group-head > div { min-width: 0; }
+.group-chip {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 11.5px; font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+}
+.group-chip.ok { color: var(--ok); background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.group-chip.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+
+/* Jump list. The settings page is long by nature — grouping alone did not make
+   it findable, so the groups get an index. */
+.settings-nav {
+  position: sticky; top: -26px; z-index: 5;
+  display: flex; gap: 6px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 14px;
+  background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.settings-nav-item {
+  padding: 5px 11px;
+  font: inherit; font-size: 12px; font-weight: 550;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.settings-nav-item:hover { color: var(--text); background: var(--bg-hover); border-color: var(--border); }
+.settings-nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Where did I land? A brief accent edge after a jump. */
+.settings-group.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.settings-group { transition: border-color 0.4s var(--ease), box-shadow 0.4s var(--ease); }
+
+.rates-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 18px 0 8px; }
+.rates-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.muted { color: var(--text-faint); font-weight: 450; }
 
 .toggle-list { display: flex; flex-direction: column; gap: 2px; }
 .toggle-row {
@@ -483,18 +649,23 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   border-radius: var(--radius-sm);
 }
 .input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.input.area { font-family: var(--mono); font-size: 12px; line-height: 1.6; resize: vertical; min-height: 76px; }
+.input.tiny { width: 84px; padding: 5px 8px; font-size: 12px; }
 
 .policy-list { display: flex; flex-direction: column; gap: 6px; }
 .policy-row {
   display: grid;
-  grid-template-columns: 1fr 96px 96px 52px;
+  grid-template-columns: 1fr 96px 96px;
   gap: 12px; align-items: center;
   padding: 10px 12px;
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-@media (max-width: 780px) { .policy-row { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 780px) {
+  .policy-row { grid-template-columns: 1fr 1fr; }
+  .path-row { grid-template-columns: 1fr; gap: 3px; }
+}
 .policy-name { font-size: 13px; font-weight: 550; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .policy-why { font-size: 11.5px; color: var(--text-faint); margin-top: 1px; }
 .policy-field { display: flex; flex-direction: column; gap: 3px; }
@@ -509,9 +680,108 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- About ---------- */
-.about-panel { max-width: 82ch; }
-.about-panel h2 { margin: 18px 0 7px; }
-.about-panel h2:first-child { margin-top: 0; }
+.hero {
+  position: relative; overflow: hidden;
+  padding: 30px 30px 24px;
+  margin-bottom: 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+/* Accent wash behind the title. Kept to a single soft radial so it reads as
+   depth rather than decoration, and it inherits the chosen accent. */
+.hero-glow {
+  position: absolute; inset: -60% 30% 40% -10%;
+  background: radial-gradient(circle at 30% 50%, var(--accent-soft), transparent 65%);
+  pointer-events: none;
+}
+.hero-main { position: relative; display: flex; align-items: flex-start; gap: 18px; }
+.hero-icon { width: 54px; height: 54px; flex: none; filter: drop-shadow(0 4px 14px var(--accent-soft)); }
+.hero-text { min-width: 0; }
+.hero-text h1 { font-size: 27px; letter-spacing: -0.03em; }
+.hero-tag { margin: 6px 0 0; font-size: 14px; color: var(--text-dim); max-width: 66ch; line-height: 1.55; }
+.hero-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+
+.hero-metrics {
+  position: relative;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 14px;
+  margin-top: 24px; padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+/* Reused outside the About hero (Analytics → Records), where there is no hero
+   above to separate from. */
+.hero-metrics.flush { margin-top: 0; padding-top: 0; border-top: 0; }
+.hero-metric { display: flex; flex-direction: column; gap: 2px; }
+.hero-metric-num { font-size: 22px; font-weight: 660; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.hero-metric-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-faint); }
+.hero-metric-sub { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+
+/* Numbered mechanism walkthrough. The counter is drawn rather than using the
+   list marker so it can sit in a badge. */
+.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.step {
+  counter-increment: step;
+  position: relative;
+  padding: 12px 0 12px 44px;
+}
+.step + .step { border-top: 1px solid var(--border); }
+.step::before {
+  content: counter(step);
+  position: absolute; left: 0; top: 12px;
+  display: grid; place-items: center;
+  width: 26px; height: 26px;
+  font-size: 12px; font-weight: 650;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+}
+.step-title { font-size: 13.5px; font-weight: 600; }
+.step-body { margin-top: 3px; font-size: 12.5px; color: var(--text-dim); line-height: 1.55; }
+
+.principles { display: flex; flex-direction: column; gap: 12px; }
+.principle { padding-left: 12px; border-left: 2px solid var(--accent-border); }
+.principle-title { font-size: 13px; font-weight: 600; }
+.principle-body { margin-top: 2px; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+
+.split-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.split-card {
+  padding: 14px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.split-card.ok { border-top-color: var(--ok); }
+.split-card.warn { border-top-color: var(--warn); }
+.split-card-head { margin-bottom: 10px; }
+.split-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+
+/* Clickable path rows: a path you cannot open is a path you have to copy out by
+   hand, which is the thing this page exists to avoid. */
+.path-list { display: flex; flex-direction: column; gap: 4px; }
+.path-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr) auto;
+  gap: 14px; align-items: center;
+  width: 100%; text-align: left;
+  padding: 9px 12px;
+  font: inherit;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: inherit;
+}
+button.path-row { cursor: pointer; transition: all 0.15s var(--ease); }
+button.path-row:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+button.path-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.path-label { font-size: 12.5px; font-weight: 550; color: var(--text-dim); }
+.path-value { font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); overflow-wrap: anywhere; }
+.path-open { font-size: 11px; font-weight: 600; color: var(--accent-text); opacity: 0; transition: opacity 0.15s var(--ease); }
+button.path-row:hover .path-open, button.path-row:focus-visible .path-open { opacity: 1; }
+
 .about-panel p { margin: 0 0 10px; font-size: 13.5px; color: var(--text-dim); }
 .about-panel code {
   padding: 1px 6px;
@@ -521,9 +791,41 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   border-radius: 5px;
 }
 .about-panel strong { color: var(--text); }
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 12.5px; }
-.kv dt, .kv .k { color: var(--text-faint); font-weight: 550; }
-.kv .v { font-family: var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
+/* Repository callout on the About page. The mark is oversized on purpose — it is
+   the one thing on the page someone is scanning for. */
+.repo-card { display: flex; gap: 18px; align-items: flex-start; }
+.repo-mark { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--bg-elev-2); border: 1px solid var(--border); }
+.repo-mark svg { width: 26px; height: 26px; fill: var(--text); }
+.repo-body { min-width: 0; }
+.repo-name { font-size: 15px; font-weight: 600; font-family: var(--mono); letter-spacing: -0.01em; }
+.repo-desc { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--text-dim); max-width: 76ch; }
+.repo-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+
+/* Sits under the repo card as a tinted aside — a credit, not a second heading,
+   so it reads as quieter than the card above it. */
+.built-with {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-top: 20px;
+  padding: 16px 18px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+}
+.built-mark { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--bg-elev); border: 1px solid var(--border); }
+.built-mark svg { width: 17px; height: 17px; fill: var(--accent); }
+.built-body { min-width: 0; }
+.built-title { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
+.built-desc { margin: 5px 0 0; font-size: 12.5px; line-height: 1.65; color: var(--text-dim); max-width: 78ch; }
+.built-desc strong { color: var(--text); font-weight: 600; }
+
+@media (max-width: 680px) {
+  .repo-card { flex-direction: column; gap: 12px; }
+  .built-with { flex-direction: column; gap: 10px; }
+}
+
+.about-foot { padding: 4px 2px 10px; font-size: 12px; color: var(--text-faint); }
 
 /* ---------- Toasts ---------- */
 .toast-host { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }

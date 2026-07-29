@@ -94,6 +94,12 @@ class Monitor extends EventEmitter {
       const recovered = events.filter((e) => e.kind === eventlog.KINDS.RECOVERED);
       stats.recoveredToday = recovered.filter((e) => now - e.at < 86_400_000).length;
       stats.lastRecoveryAt = recovered.length ? recovered[0].at : null;
+      // The same reasoning applies to the all-time figure the About page shows.
+      // `stats.total` is a count of ledger *attempts*, which the ledger prunes to
+      // 48 hours — so on any machine older than that it reported 0 recoveries
+      // above a timeline listing them. This is capped by the event log's own read
+      // window, and named so rather than as a grand total.
+      stats.recoveredLogged = recovered.length;
 
       // Anything a human needs to act on: non-retryable failures and hit caps.
       const attention = events
