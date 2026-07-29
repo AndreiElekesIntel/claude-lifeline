@@ -66,6 +66,8 @@ It needs no extra hook. A finished prompt is a `busy` → `idle` transition in t
 
 The toast title comes from a per-user registry entry (`HKCU\Software\Classes\AppUserModelId\com.aelekes.claudelifeline`) that the app writes at startup. Windows reads the app name shown on a toast from there rather than from the executable, so without it every notification is labelled with the raw id instead of "Claude Lifeline".
 
+That entry is the one thing a sandboxed run cannot be isolated from — `LIFELINE_HOME` redirects every file Lifeline writes, but the registry is per-user and machine-wide. So an app launched with `LIFELINE_E2E=1`, or against a `LIFELINE_HOME` that is not the real data directory, **does not register at all**: it would otherwise overwrite the real installation's entry with an icon path inside a scratch directory that is deleted when the run ends.
+
 ### `launchpad.presets`
 
 One entry per saved session. Everything except `id` and `label` is optional — an entry with only those two opens a plain session in your home directory.

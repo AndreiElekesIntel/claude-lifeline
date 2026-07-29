@@ -29,6 +29,16 @@
  *
  * Every failure here is swallowed. A wrong-looking notification title is a
  * cosmetic problem, and it must never be the reason the app fails to start.
+ *
+ * ## Why a sandboxed run must not register
+ *
+ * The registry is the one thing a test cannot be sandboxed away from. Every other
+ * write goes through LIFELINE_HOME, but HKCU is per-user and machine-wide, so an
+ * app launched by the e2e suite writes over the *real* installation's entry. That
+ * is not hypothetical: it happened, and it left `IconUri` pointing into a
+ * `Temp\lifeline-*` directory that was deleted when the test finished, so the real
+ * app's toasts lost their icon. `skipReason` below is what keeps a test run from
+ * reaching outside its sandbox.
  */
 
 const { execFile } = require('child_process');
@@ -89,14 +99,41 @@ function regAdd(name, value) {
 }
 
 /**
+ * Why this run must not touch the registry, or null if it may.
+ *
+ * Two cases, and both are the same underlying rule: only an app running against
+ * the real data dir may publish a machine-wide path.
+ *
+ *  - `LIFELINE_E2E` — a test launch. Explicit, and the reason this check exists.
+ *  - A redirected `LIFELINE_HOME` — any sandboxed run, whether or not it set the
+ *    e2e flag. Checked by where the icon would actually land rather than by the
+ *    variable being present, so pointing LIFELINE_HOME at the default path (which
+ *    some setups do) is still allowed to register.
+ */
+function skipReason() {
+  if (process.env.LIFELINE_E2E === '1') return 'test launch';
+  if (!process.env.LIFELINE_HOME) return null;
+
+  const appData = process.env.APPDATA;
+  if (!appData) return 'sandboxed home';
+  const real = path.join(appData, 'claude-lifeline');
+  // Compared case-insensitively: Windows paths are, and a case difference here
+  // would silently turn a legitimate launch into a skipped one.
+  return path.resolve(process.env.LIFELINE_HOME).toLowerCase() === real.toLowerCase() ? null : 'sandboxed home';
+}
+
+/**
  * Register the display name and icon for our AUMID.
  *
- * Idempotent (`reg add /f` overwrites), and a no-op off Windows. Awaited at
- * startup so the first toast of the session already has a name, but a failure
- * only means a badly-labelled notification.
+ * Idempotent (`reg add /f` overwrites), and a no-op off Windows or in a sandboxed
+ * run. Awaited at startup so the first toast of the session already has a name, but
+ * a failure only means a badly-labelled notification.
  */
 async function registerToastIdentity() {
   if (process.platform !== 'win32') return { ok: false, reason: 'not windows' };
+
+  const skip = skipReason();
+  if (skip) return { ok: false, reason: skip };
 
   const named = await regAdd('DisplayName', DISPLAY_NAME);
   const icon = ensureIconFile();
@@ -105,4 +142,7 @@ async function registerToastIdentity() {
   return { ok: named, displayName: DISPLAY_NAME, icon: iconSet ? icon : null };
 }
 
-module.exports = { registerToastIdentity, APP_USER_MODEL_ID, DISPLAY_NAME, AUMID_KEY };
+// skipReason is exported so the isolation guard can be tested without letting a
+// unit suite reach reg.exe — asserting it through registerToastIdentity would mean
+// performing the very write the guard exists to prevent.
+module.exports = { registerToastIdentity, skipReason, APP_USER_MODEL_ID, DISPLAY_NAME, AUMID_KEY };

@@ -56,6 +56,82 @@ test('the registry key is per-user, so no elevation is ever needed', () => {
   assert.ok(identity.AUMID_KEY.endsWith(identity.APP_USER_MODEL_ID));
 });
 
+/**
+ * The registry is the one piece of state LIFELINE_HOME cannot redirect.
+ *
+ * These four are the regression guard for a real escape: e2e-launched apps
+ * registered against the developer's own HKCU and left `IconUri` pointing at a
+ * `Temp\lifeline-*` sandbox, which was deleted when the run finished — so the real
+ * install's toasts lost their icon to a test. Anything that reaches reg.exe from a
+ * sandboxed run is the bug, so these assert the refusal, not the write.
+ */
+test('a test launch refuses to register, so it cannot overwrite the real entry', async () => {
+  const real = process.env.LIFELINE_E2E;
+  try {
+    process.env.LIFELINE_E2E = '1';
+    const res = await identity.registerToastIdentity();
+    assert.equal(res.ok, false);
+    assert.match(res.reason, /test/i);
+    // Nothing was written, so nothing claims to have been.
+    assert.equal(res.icon, undefined);
+  } finally {
+    if (real === undefined) delete process.env.LIFELINE_E2E;
+    else process.env.LIFELINE_E2E = real;
+  }
+});
+
+test('a sandboxed LIFELINE_HOME refuses too, even without the e2e flag', async () => {
+  // A test that forgets the flag, or a script run against a scratch home, must not
+  // publish an icon path that is about to be deleted.
+  const realHome = process.env.LIFELINE_HOME;
+  const realFlag = process.env.LIFELINE_E2E;
+  try {
+    delete process.env.LIFELINE_E2E;
+    process.env.LIFELINE_HOME = path.join(require('os').tmpdir(), 'lifeline-scratch-not-real');
+    const res = await identity.registerToastIdentity();
+    assert.equal(res.ok, false);
+    assert.match(res.reason, /sandbox/i);
+  } finally {
+    if (realHome === undefined) delete process.env.LIFELINE_HOME;
+    else process.env.LIFELINE_HOME = realHome;
+    if (realFlag !== undefined) process.env.LIFELINE_E2E = realFlag;
+  }
+});
+
+test('LIFELINE_HOME pointing at the real dir is not treated as a sandbox', async () => {
+  /**
+   * The guard must key on *where* the home is, not on the variable existing —
+   * setup.ps1 and some launchers set LIFELINE_HOME explicitly to the default path,
+   * and refusing there would reintroduce the raw-id titles the module exists to fix.
+   *
+   * Asserts skipReason directly rather than through registerToastIdentity: the
+   * latter would go on to call reg.exe, which is the write this whole guard exists
+   * to prevent, and a unit suite must not perform it either.
+   */
+  const realHome = process.env.LIFELINE_HOME;
+  const realFlag = process.env.LIFELINE_E2E;
+  const appData = process.env.APPDATA;
+  try {
+    delete process.env.LIFELINE_E2E;
+    process.env.APPDATA = 'C:\\Users\\someone\\AppData\\Roaming';
+    // Deliberately a different case: Windows paths are case-insensitive, and a
+    // case-sensitive compare here would skip a legitimate launch.
+    process.env.LIFELINE_HOME = 'c:\\users\\someone\\appdata\\roaming\\Claude-Lifeline';
+    assert.equal(identity.skipReason(), null);
+  } finally {
+    if (realHome === undefined) delete process.env.LIFELINE_HOME;
+    else process.env.LIFELINE_HOME = realHome;
+    if (realFlag !== undefined) process.env.LIFELINE_E2E = realFlag;
+    process.env.APPDATA = appData;
+  }
+});
+
+test('the e2e fixture sets the flag that suppresses registration', () => {
+  // The guard above is only load-bearing if every e2e launch actually carries the
+  // flag. If the fixture stops setting it, the escape is back and silent.
+  assert.match(read('test/e2e/fixtures.js'), /LIFELINE_E2E:\s*'1'/);
+});
+
 test('registering off Windows is a no-op rather than an error', async () => {
   // The suite runs on Windows, so the platform is faked. Restored in a finally:
   // leaving process.platform patched would corrupt every test that follows.
