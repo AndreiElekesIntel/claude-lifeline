@@ -208,6 +208,10 @@ function goTo(tab) {
   // The picker was built while this tab was hidden, where every offset measures
   // zero — so the glider has to be placed the first time it is actually visible.
   if (tab === 'analytics') syncRangePicker();
+  // History reads the same scan. Only re-fetched on first open, or when the report
+  // has moved on: regrouping on every visit would discard a search mid-typing.
+  if (tab === 'history') loadHistory({ scan: !historyData });
+  if (tab === 'launchpad') renderLaunchpad();
 }
 
 $$('.nav-item').forEach((btn) => btn.addEventListener('click', () => goTo(btn.dataset.tab)));
@@ -556,11 +560,16 @@ function renderSessions() {
       text = 'idle';
     }
     const stateCell = el('td');
-    stateCell.appendChild(el('span', `chip ${tone}`, text));
+    const chip = el('span', `chip ${tone}`, text);
+    // `idleMs` is time since the transcript was last written, so it is the evidence
+    // for the word in the chip rather than extra detail — worth saying, because
+    // this column used to claim "stalled" for sessions that were plainly working.
+    if (s.alive && s.status === 'busy') chip.title = `Last wrote to its transcript ${relTime(s.activeAt)}.`;
+    stateCell.appendChild(chip);
     tr.appendChild(stateCell);
 
     tr.appendChild(sessionCostCell(s));
-    tr.appendChild(el('td', 'mono', relTime(s.updatedAt)));
+    tr.appendChild(el('td', 'mono', relTime(s.activeAt || s.updatedAt)));
     tr.appendChild(el('td', 'mono', s.pid));
     body.appendChild(tr);
   }
@@ -1334,6 +1343,535 @@ function renderUsageRecords(u) {
   }
 }
 
+/* ================================ history ============================== */
+
+/** Last grouped payload from main. Null until the tab has been opened once. */
+let historyData = null;
+/** The live search box contents, kept here so a re-render does not lose it. */
+let historyQuery = '';
+/** Which day sections the user has collapsed, by key. */
+const historyCollapsed = new Set();
+/** Session id currently being renamed inline, or null. */
+let renamingId = null;
+
+/**
+ * Fetch and draw the history.
+ *
+ * Two steps, because they cost very different amounts: the analytics report is
+ * what reads transcripts and can take seconds on a cold cache, while the grouping
+ * is arithmetic over an array already in memory. So a keystroke in the search box
+ * only redoes the second one.
+ */
+async function loadHistory({ force = false, scan = true } = {}) {
+  const off = state && state.config.analytics && state.config.analytics.enabled === false;
+  $('#historyOffBanner').classList.toggle('hidden', !off);
+  $('#historyStats').classList.toggle('hidden', Boolean(off));
+  if (off) {
+    $('#historyList').replaceChildren();
+    $('#historyEmpty').classList.add('hidden');
+    return;
+  }
+
+  // Reuses the same scan the Analytics tab does, rather than a second one: both
+  // read the same report, and analyticsReport() joins an in-flight scan.
+  if (scan) {
+    try {
+      const res = await api.analyticsReport({ force });
+      if (res && res.report) analytics = res.report;
+    } catch {
+      /* the grouping below will report the absence */
+    }
+  }
+
+  try {
+    historyData = await api.historyGroups({ query: historyQuery });
+  } catch (err) {
+    toast(`History failed: ${err.message}`, 'danger');
+    return;
+  }
+  renderHistory();
+}
+
+function renderHistory() {
+  const host = $('#historyList');
+  host.replaceChildren();
+
+  const data = historyData;
+  const groups = (data && data.groups) || [];
+  const totals = (data && data.totals) || null;
+
+  // The counts read differently with a query in the box: "12" alone looks like
+  // everything there is, when it is twelve of two hundred.
+  const filtered = Boolean(historyQuery.trim());
+  $('#histSessions').textContent = totals ? String(totals.sessions) : '—';
+  $('#histSessionsFoot').textContent = filtered && data && data.total ? `of ${data.total} on disk` : ' ';
+  $('#histTime').textContent = totals ? humanMs(totals.activeMs) : '—';
+  $('#histCost').textContent = totals ? money(totals.costUsd) : '—';
+  $('#histDays').textContent = totals ? String(totals.days) : '—';
+  $('#histDaysFoot').textContent = groups.length ? `since ${groups[groups.length - 1].label}` : ' ';
+
+  const empty = $('#historyEmpty');
+  empty.classList.toggle('hidden', groups.length > 0);
+  if (!groups.length) {
+    // Three different nothings, and saying which one it is decides whether the
+    // user waits, clears the box, or goes and starts a session.
+    if (filtered) {
+      $('#historyEmptyText').textContent = 'Nothing matches that search.';
+      $('#historyEmptyHint').textContent = 'Project names, branches, titles and prompts are all searched.';
+    } else if (data && data.empty) {
+      $('#historyEmptyText').textContent = 'Reading transcripts…';
+      $('#historyEmptyHint').textContent = 'The first scan reads every transcript on disk, which takes a moment.';
+    } else {
+      $('#historyEmptyText').textContent = 'No sessions on disk yet.';
+      $('#historyEmptyHint').textContent = "Transcripts are read from Claude Code's own projects folder.";
+    }
+    return;
+  }
+
+  for (const group of groups) host.appendChild(dayGroup(group));
+}
+
+/** One day: a header with its totals, and the sessions under it. */
+function dayGroup(group) {
+  const wrap = el('section', 'day-group');
+  const collapsed = historyCollapsed.has(group.key);
+  wrap.classList.toggle('collapsed', collapsed);
+
+  // A button, not a div: this toggles something, so it should be reachable by
+  // keyboard and announced as a control.
+  const head = el('button', 'day-head');
+  head.type = 'button';
+  head.setAttribute('aria-expanded', String(!collapsed));
+  head.appendChild(el('span', 'day-caret', collapsed ? '▸' : '▾'));
+  head.appendChild(el('span', 'day-label', group.label));
+
+  const meta = el('span', 'day-meta');
+  meta.appendChild(el('span', 'day-stat', `${group.count} ${group.count === 1 ? 'session' : 'sessions'}`));
+  const time = el('span', 'day-stat', humanMs(group.activeMs));
+  if (group.overlapping) {
+    // Honest about which figure this is. Without the intervals the total is a sum
+    // of sessions that may have overlapped, so it can exceed the wall clock.
+    time.classList.add('approx');
+    time.title = 'Sessions overlapped and the per-session spans were unavailable, so this may double-count concurrent work.';
+  }
+  meta.appendChild(time);
+  meta.appendChild(el('span', 'day-stat accent', money(group.costUsd)));
+  head.appendChild(meta);
+
+  head.addEventListener('click', () => {
+    if (historyCollapsed.has(group.key)) historyCollapsed.delete(group.key);
+    else historyCollapsed.add(group.key);
+    renderHistory();
+  });
+  wrap.appendChild(head);
+
+  const list = el('div', 'day-sessions');
+  for (const s of group.sessions) list.appendChild(historyRow(s));
+  wrap.appendChild(list);
+  return wrap;
+}
+
+/**
+ * A session's title, falling back through what is actually known.
+ *
+ * The chain matters: a custom title is what the user chose, an ai-title is what
+ * Claude Code generated, and the first prompt is what they actually typed. A bare
+ * session id is last because it identifies the row without describing it.
+ */
+function sessionTitle(s) {
+  if (s.title) return s.title;
+  const prompt = String(s.lastPrompt || '').trim();
+  if (prompt) return prompt.length > 90 ? `${prompt.slice(0, 90)}…` : prompt;
+  return `Session ${String(s.sessionId || '').slice(0, 8)}`;
+}
+
+function historyRow(s) {
+  const row = el('div', 'hist-row');
+  row.dataset.sessionId = s.sessionId;
+
+  const main = el('div', 'hist-main');
+  main.appendChild(el('div', 'hist-title', sessionTitle(s)));
+
+  const sub = el('div', 'hist-sub');
+  sub.appendChild(el('span', 'hist-project', projectName(s.cwd)));
+  if (s.gitBranch) sub.appendChild(el('span', 'hist-branch', s.gitBranch));
+  if (s.model) sub.appendChild(el('span', 'hist-model', s.model));
+  sub.appendChild(el('span', 'hist-when', new Date(s.lastAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })));
+  main.appendChild(sub);
+  row.appendChild(main);
+
+  const stats = el('div', 'hist-stats');
+  stats.appendChild(el('span', 'hist-time', humanMs(s.activeMs)));
+  stats.appendChild(el('span', 'hist-cost', money(s.costUsd)));
+  row.appendChild(stats);
+
+  const actions = el('div', 'hist-actions');
+
+  const resume = el('button', 'btn ghost small', 'Resume');
+  resume.title = 'Open this session again in a new terminal window';
+  resume.addEventListener('click', () => resumeSession(s, resume));
+  actions.appendChild(resume);
+
+  const rename = el('button', 'btn ghost small', 'Rename');
+  rename.addEventListener('click', () => startRename(row, s));
+  actions.appendChild(rename);
+
+  row.appendChild(actions);
+
+  /**
+   * The whole row resumes, not just the button.
+   *
+   * The user asked to press a session and have it open, so the row is the target.
+   * Clicks originating inside `.hist-actions` are ignored here, or pressing Rename
+   * would resume as well.
+   */
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.hist-actions') || e.target.closest('input')) return;
+    resumeSession(s, resume);
+  });
+
+  return row;
+}
+
+/** Ask main to reopen a session, and say what happened either way. */
+async function resumeSession(s, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api.resumeSession(s.sessionId);
+    if (res && res.ok) toast(`Opening ${sessionTitle(s)}…`, 'ok');
+    else toast((res && res.reason) || 'Could not resume that session.', 'warn');
+  } catch (err) {
+    toast(`Could not resume: ${err.message}`, 'danger');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/**
+ * Turn a row's title into an editable field.
+ *
+ * Whether a rename is even allowed is asked *first*, and a refusal is shown as a
+ * message rather than as a rejected edit — being told after typing a name that the
+ * session is still running would be the worse order.
+ */
+async function startRename(row, s) {
+  if (renamingId && renamingId !== s.sessionId) renderHistory(); // close the other one
+  renamingId = s.sessionId;
+
+  let verdict = { ok: true };
+  try {
+    verdict = await api.canRenameSession(s.sessionId);
+  } catch {
+    verdict = { ok: false, reason: 'Could not check whether this session is still running.' };
+  }
+  if (!verdict.ok) {
+    renamingId = null;
+    toast(verdict.reason || 'This session cannot be renamed right now.', 'warn');
+    return;
+  }
+
+  const titleNode = row.querySelector('.hist-title');
+  if (!titleNode) return;
+
+  const input = document.createElement('input');
+  input.className = 'input rename-input';
+  input.value = s.title || '';
+  input.maxLength = 120;
+  input.placeholder = 'A name you will recognise later';
+  titleNode.replaceChildren(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = async (save) => {
+    if (done) return;
+    done = true;
+    renamingId = null;
+    if (!save) {
+      renderHistory();
+      return;
+    }
+    try {
+      const res = await api.renameSession(s.sessionId, input.value);
+      if (res && res.ok) {
+        // Empty means "go back to the generated title", which is a valid request
+        // rather than a no-op, so it gets its own confirmation.
+        toast(res.name ? `Renamed to “${res.name}”.` : 'Custom name removed.', 'ok');
+        // The title comes from the analytics report, which main has just retired,
+        // so this re-reads the one transcript that changed.
+        await loadHistory({ force: true });
+      } else {
+        toast((res && res.reason) || 'Could not rename that session.', 'warn');
+        renderHistory();
+      }
+    } catch (err) {
+      toast(`Could not rename: ${err.message}`, 'danger');
+      renderHistory();
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') commit(true);
+    else if (e.key === 'Escape') commit(false);
+    // Otherwise the row's click handler would fire and resume the session.
+    e.stopPropagation();
+  });
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('blur', () => commit(true));
+}
+
+/**
+ * Search, debounced.
+ *
+ * 160ms because the grouping is fast but not free, and re-running it on every
+ * keystroke of a long query makes the box feel heavier than the work justifies.
+ * No scan is triggered — `scan: false` — so typing never reads a transcript.
+ */
+let historyTimer = null;
+$('#historySearch').addEventListener('input', (e) => {
+  historyQuery = e.target.value;
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(() => loadHistory({ scan: false }), 160);
+});
+
+$('#btnRefreshHistory').addEventListener('click', () => loadHistory({ force: true }));
+
+/* =============================== launchpad ============================= */
+
+/** Skill names from ~/.claude/skills. Fetched once when the tab first opens. */
+let availableSkills = null;
+/** The preset being edited, or null when the editor is closed. */
+let editingPreset = null;
+
+function presets() {
+  return (state && state.config.launchpad && state.config.launchpad.presets) || [];
+}
+
+function renderLaunchpad() {
+  const grid = $('#presetGrid');
+  grid.replaceChildren();
+  const list = presets();
+
+  $('#presetEmpty').classList.toggle('hidden', list.length > 0 || Boolean(editingPreset));
+  grid.classList.toggle('hidden', list.length === 0);
+
+  for (const p of list) grid.appendChild(presetCard(p));
+}
+
+function presetCard(p) {
+  const card = el('article', 'preset-card');
+
+  // The card itself launches. It is the primary action, and making the user find a
+  // small button inside a big clickable-looking tile is a worse version of this.
+  const launch = el('button', 'preset-launch');
+  launch.type = 'button';
+  launch.title = 'Start a session with this configuration';
+  launch.appendChild(el('span', 'preset-label', p.label));
+
+  const bits = el('span', 'preset-bits');
+  if (p.cwd) bits.appendChild(el('span', 'preset-chip', projectName(p.cwd)));
+  if (p.model) bits.appendChild(el('span', 'preset-chip', p.model));
+  if (p.permissionMode) bits.appendChild(el('span', 'preset-chip', p.permissionMode));
+  for (const s of p.skills || []) bits.appendChild(el('span', 'preset-chip skill', `/${s}`));
+  launch.appendChild(bits);
+
+  if (p.prePrompt) {
+    const preview = String(p.prePrompt).replace(/\s+/g, ' ').trim();
+    launch.appendChild(el('span', 'preset-prompt', preview.length > 120 ? `${preview.slice(0, 120)}…` : preview));
+  }
+  if (p.accelerator) launch.appendChild(el('span', 'preset-accel', p.accelerator));
+
+  launch.addEventListener('click', async () => {
+    launch.disabled = true;
+    try {
+      const res = await api.launchPreset(p.id);
+      if (res && res.ok) toast(`Starting “${p.label}”…`, 'ok');
+      else toast((res && res.reason) || 'Could not start that session.', 'warn');
+    } catch (err) {
+      toast(`Could not start: ${err.message}`, 'danger');
+    } finally {
+      launch.disabled = false;
+    }
+  });
+  card.appendChild(launch);
+
+  const foot = el('div', 'preset-foot');
+
+  const edit = el('button', 'btn ghost small', 'Edit');
+  edit.addEventListener('click', () => openPresetEditor(p));
+  foot.appendChild(edit);
+
+  const desktop = el('button', 'btn ghost small', 'Send to desktop');
+  desktop.title = 'Put an icon on your Desktop that starts this session';
+  desktop.addEventListener('click', async () => {
+    desktop.disabled = true;
+    try {
+      const res = await api.presetToDesktop(p.id);
+      if (res && res.ok) toast('Shortcut added to your Desktop.', 'ok');
+      else toast((res && res.reason) || 'Could not create the shortcut.', 'warn');
+    } catch (err) {
+      toast(`Could not create the shortcut: ${err.message}`, 'danger');
+    } finally {
+      desktop.disabled = false;
+    }
+  });
+  foot.appendChild(desktop);
+
+  card.appendChild(foot);
+  return card;
+}
+
+/** Model choices: the aliases, plus whatever the preset already holds. */
+const PRESET_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
+/** Kept in step with launcher.js's allowlist, which the CLI's --help defines. */
+const PRESET_MODES = ['manual', 'auto', 'acceptEdits', 'dontAsk', 'plan', 'bypassPermissions'];
+
+async function openPresetEditor(preset) {
+  editingPreset = preset || { id: null, label: '', skills: [] };
+  const isNew = !preset;
+
+  $('#presetEditor').classList.remove('hidden');
+  $('#presetEmpty').classList.add('hidden');
+  $('#presetEditorTitle').textContent = isNew ? 'New shortcut' : `Editing “${preset.label}”`;
+  $('#btnDeletePreset').classList.toggle('hidden', isNew);
+
+  $('#presetLabel').value = editingPreset.label || '';
+  $('#presetCwd').value = editingPreset.cwd || '';
+  $('#presetAccel').value = editingPreset.accelerator || '';
+  $('#presetPrompt').value = editingPreset.prePrompt || '';
+
+  fillSelect($('#presetModel'), PRESET_MODELS, editingPreset.model, "Claude Code's default");
+  fillSelect($('#presetMode'), PRESET_MODES, editingPreset.permissionMode, "Claude Code's default");
+
+  // Fetched once: the skills directory does not change while the app is open, and
+  // re-reading it on every editor open would be a directory walk per click.
+  if (availableSkills === null) {
+    try {
+      availableSkills = await api.listSkills();
+    } catch {
+      availableSkills = [];
+    }
+  }
+  renderSkillPicker();
+
+  $('#presetLabel').focus();
+  $('#presetEditor').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/** Options plus a blank first entry, since "unset" is a real choice here. */
+function fillSelect(select, values, current, blankLabel) {
+  select.replaceChildren();
+  const blank = el('option', null, blankLabel);
+  blank.value = '';
+  select.appendChild(blank);
+  const all = [...values];
+  // A preset saved with a full model id keeps it, rather than being silently
+  // reset to an alias by opening the editor.
+  if (current && !all.includes(current)) all.push(current);
+  for (const v of all) {
+    const opt = el('option', null, v);
+    opt.value = v;
+    select.appendChild(opt);
+  }
+  select.value = current || '';
+}
+
+/**
+ * Checkboxes for the installed skills, plus any the preset names that are gone.
+ *
+ * A missing one is shown and flagged rather than dropped, because silently
+ * removing it would make the shortcut quietly stop doing part of its job.
+ */
+function renderSkillPicker() {
+  const host = $('#presetSkills');
+  host.replaceChildren();
+  const chosen = new Set(editingPreset.skills || []);
+  const names = [...(availableSkills || [])];
+  const missing = [...chosen].filter((s) => !names.includes(s));
+  for (const s of missing) names.push(s);
+
+  if (!names.length) {
+    host.appendChild(el('p', 'field-hint', 'No skills found in ~/.claude/skills.'));
+    return;
+  }
+
+  for (const name of names.sort()) {
+    const label = el('label', 'skill-chip');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = chosen.has(name);
+    box.addEventListener('change', () => {
+      const next = new Set(editingPreset.skills || []);
+      if (box.checked) next.add(name);
+      else next.delete(name);
+      editingPreset.skills = [...next];
+    });
+    label.appendChild(box);
+    label.appendChild(el('span', null, `/${name}`));
+    if (missing.includes(name)) {
+      label.classList.add('missing');
+      label.title = 'This skill is no longer installed, so it would have no effect.';
+    }
+    host.appendChild(label);
+  }
+}
+
+function closePresetEditor() {
+  editingPreset = null;
+  $('#presetEditor').classList.add('hidden');
+  renderLaunchpad();
+}
+
+$('#btnNewPreset').addEventListener('click', () => openPresetEditor(null));
+$('#btnFirstPreset').addEventListener('click', () => openPresetEditor(null));
+$('#btnCancelPreset').addEventListener('click', () => closePresetEditor());
+
+$('#btnPickCwd').addEventListener('click', async () => {
+  try {
+    const res = await api.pickDirectory();
+    if (res && res.ok) $('#presetCwd').value = res.path;
+  } catch (err) {
+    toast(`Could not open the folder picker: ${err.message}`, 'danger');
+  }
+});
+
+$('#btnSavePreset').addEventListener('click', async () => {
+  const preset = {
+    id: editingPreset && editingPreset.id,
+    label: $('#presetLabel').value,
+    cwd: $('#presetCwd').value,
+    model: $('#presetModel').value,
+    permissionMode: $('#presetMode').value,
+    accelerator: $('#presetAccel').value,
+    prePrompt: $('#presetPrompt').value,
+    skills: (editingPreset && editingPreset.skills) || [],
+  };
+  try {
+    const res = await api.savePreset(preset);
+    if (!res || !res.ok) {
+      toast((res && res.reason) || 'Could not save that shortcut.', 'warn');
+      return;
+    }
+    toast('Shortcut saved.', 'ok');
+    closePresetEditor();
+    await refresh();
+  } catch (err) {
+    toast(`Could not save: ${err.message}`, 'danger');
+  }
+});
+
+$('#btnDeletePreset').addEventListener('click', async () => {
+  if (!editingPreset || !editingPreset.id) return;
+  try {
+    await api.deletePreset(editingPreset.id);
+    toast('Shortcut deleted.', 'ok');
+    closePresetEditor();
+    await refresh();
+  } catch (err) {
+    toast(`Could not delete: ${err.message}`, 'danger');
+  }
+});
+
 /* =============================== activity ============================= */
 
 function renderActivity() {
@@ -2027,6 +2565,9 @@ function renderLive() {
   renderSessions();
   renderActivity();
   renderHookStatus();
+  // Presets live in config, so a save or an external edit has to redraw the grid.
+  // Skipped while the editor is open, or a poll would discard a half-typed preset.
+  if (!editingPreset) renderLaunchpad();
 }
 
 function apply(next, { full = false } = {}) {

@@ -60,6 +60,17 @@
           <span>Sessions</span>
           <span class="nav-badge" id="badgeSessions"></span>
         </button>
+        <button class="nav-item" data-tab="history">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
+          <span>History</span>
+        </button>
+        <button class="nav-item" data-tab="launchpad">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3c3 2.6 4.5 5.7 4.5 8.6 0 1.9-.7 3.6-1.9 4.9h-5.2A6.7 6.7 0 0 1 7.5 11.6C7.5 8.7 9 5.6 12 3z" />
+            <path d="M9.4 16.5 8 21l4-2 4 2-1.4-4.5M12 10h.01" />
+          </svg>
+          <span>Launchpad</span>
+        </button>
         <button class="nav-item" data-tab="analytics">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
           <span>Analytics</span>
@@ -224,6 +235,161 @@
               <div class="empty-art">◌</div>
               <p>No Claude Code sessions running.</p>
               <span>Start one and it will appear here within a few seconds.</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ HISTORY ============ -->
+        <section class="tab" data-tab="history">
+          <div class="page-head">
+            <div>
+              <h1>History</h1>
+              <p class="subtitle">
+                Every session Claude Code has a transcript for, grouped by the day you last worked in it. Click one to
+                open it again.
+              </p>
+            </div>
+            <div class="head-actions">
+              <!-- type=search gives the native clear button, which is one fewer
+                   thing to build and behaves the way the platform's does. -->
+              <input type="search" class="input search" id="historySearch" placeholder="Search sessions…" aria-label="Search sessions" />
+              <button class="btn ghost" id="btnRefreshHistory">Refresh</button>
+            </div>
+          </div>
+
+          <div class="banner warn hidden" id="historyOffBanner">
+            <div class="banner-icon">!</div>
+            <div class="banner-body">
+              <strong>Analytics is turned off</strong>
+              <span>History is built from the same transcript scan, so there is nothing to show until it is on.</span>
+            </div>
+            <button class="btn go" data-goto="settings">Open settings</button>
+          </div>
+
+          <div class="stat-grid" id="historyStats">
+            <div class="stat-card">
+              <div class="stat-label">Sessions</div>
+              <div class="stat-value" id="histSessions">—</div>
+              <div class="stat-foot" id="histSessionsFoot">&nbsp;</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Time worked</div>
+              <div class="stat-value" id="histTime">—</div>
+              <div class="stat-foot">across every day shown</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Estimated cost</div>
+              <div class="stat-value accent" id="histCost">—</div>
+              <div class="stat-foot">derived from token counts</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Days</div>
+              <div class="stat-value" id="histDays">—</div>
+              <div class="stat-foot" id="histDaysFoot">&nbsp;</div>
+            </div>
+          </div>
+
+          <div class="history-list" id="historyList"></div>
+
+          <div class="empty hidden" id="historyEmpty">
+            <div class="empty-art">◌</div>
+            <p id="historyEmptyText">No sessions found.</p>
+            <span id="historyEmptyHint">Transcripts are read from Claude Code's own projects folder.</span>
+          </div>
+        </section>
+
+        <!-- ============ LAUNCHPAD ============ -->
+        <section class="tab" data-tab="launchpad">
+          <div class="page-head">
+            <div>
+              <h1>Launchpad</h1>
+              <p class="subtitle">
+                One button per way you start Claude Code — a folder, a model, the skills you want loaded, and the prompt
+                to open with.
+              </p>
+            </div>
+            <div class="head-actions">
+              <button class="btn primary" id="btnNewPreset">New shortcut</button>
+            </div>
+          </div>
+
+          <div class="preset-grid" id="presetGrid"></div>
+
+          <div class="empty hidden" id="presetEmpty">
+            <div class="empty-art">◌</div>
+            <p>No shortcuts yet.</p>
+            <span
+              >A shortcut saves a folder, a model, some skills and an opening prompt, then starts a session with all of
+              it in one click.</span
+            >
+            <button class="btn primary" id="btnFirstPreset">Create the first one</button>
+          </div>
+
+          <!-- The editor is a panel rather than a modal: a pre-prompt is often
+               several paragraphs, and a dialog that has to be dismissed to look at
+               the other shortcuts is the wrong shape for that. -->
+          <div class="settings-group hidden" id="presetEditor">
+            <div class="group-head">
+              <div>
+                <h2 id="presetEditorTitle">New shortcut</h2>
+                <p class="group-hint">
+                  Everything here is optional except the name. Sessions start with permission prompts skipped and
+                  project MCP servers ignored, so a shortcut never opens and then sits waiting on a dialog.
+                </p>
+              </div>
+            </div>
+
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">Name</span>
+                <input class="input" id="presetLabel" maxlength="60" placeholder="Review the payments diff" />
+                <span class="field-hint">Shown on the button, and on the desktop icon.</span>
+              </label>
+              <label class="field">
+                <span class="field-label">Model</span>
+                <select class="select" id="presetModel"></select>
+                <span class="field-hint">Claude Code's own default if left unset.</span>
+              </label>
+              <label class="field wide">
+                <span class="field-label">Project folder</span>
+                <span class="input-with-btn">
+                  <input class="input" id="presetCwd" placeholder="Wherever Claude Code would start" />
+                  <button class="btn ghost small" id="btnPickCwd">Browse…</button>
+                </span>
+                <span class="field-hint">Where the session opens.</span>
+              </label>
+              <label class="field">
+                <span class="field-label">Permission mode</span>
+                <select class="select" id="presetMode"></select>
+                <span class="field-hint">Left unset, Claude Code decides.</span>
+              </label>
+              <label class="field">
+                <span class="field-label">Keyboard shortcut</span>
+                <input class="input" id="presetAccel" maxlength="60" placeholder="CommandOrControl+Alt+1" />
+                <span class="field-hint">Works anywhere in Windows, even with this window closed.</span>
+              </label>
+            </div>
+
+            <div class="field-block">
+              <span class="field-label">Skills to load</span>
+              <p class="field-hint tight">
+                Added to the top of the prompt as <code>/name</code> lines, which is how a skill is invoked.
+              </p>
+              <div class="skill-picker" id="presetSkills"></div>
+            </div>
+
+            <div class="field-block">
+              <label class="field-label" for="presetPrompt">Opening prompt</label>
+              <p class="field-hint tight">
+                Sent as the first message, so the session starts working immediately. Multiple lines are fine.
+              </p>
+              <textarea class="input textarea" id="presetPrompt" rows="5" maxlength="4000" placeholder="Read CLAUDE.md, then summarise what changed since yesterday."></textarea>
+            </div>
+
+            <div class="row-actions">
+              <button class="btn primary" id="btnSavePreset">Save shortcut</button>
+              <button class="btn ghost" id="btnCancelPreset">Cancel</button>
+              <button class="btn danger" id="btnDeletePreset">Delete</button>
             </div>
           </div>
         </section>

@@ -113,7 +113,41 @@ test('capture README screenshots in both themes', async () => {
   seed(sandbox);
   // Hooks pre-installed so the shots show the healthy steady state, not the
   // first-run warning banner.
-  fx.writeConfig(sandbox, { ui: { theme: 'dark', accent: 'violet', startMinimised: false } });
+  fx.writeConfig(sandbox, {
+    ui: { theme: 'dark', accent: 'violet', startMinimised: false },
+    // Launchpad photographs as an empty state otherwise, and the empty state is
+    // already covered by its own test. These are plausible, not real: no shot
+    // ever launches one.
+    launchpad: {
+      presets: [
+        {
+          id: 'aaaaaa',
+          label: 'Morning triage',
+          cwd: 'C:/work/payments-api',
+          model: 'opus',
+          skills: ['code-review'],
+          prePrompt: 'Read the overnight CI failures and tell me which ones are real.',
+          accelerator: 'CommandOrControl+Alt+1',
+        },
+        {
+          id: 'bbbbbb',
+          label: 'Ship the release',
+          cwd: 'C:/work/payments-api',
+          model: 'sonnet',
+          permissionMode: 'plan',
+          prePrompt: 'Draft the release notes from the commits since the last tag.',
+          accelerator: 'CommandOrControl+Alt+2',
+        },
+        {
+          id: 'cccccc',
+          label: 'Charts',
+          cwd: 'C:/work/telemetry-dashboard',
+          skills: ['frontend-review'],
+          prePrompt: 'Pick up the latency chart work.',
+        },
+      ],
+    },
+  });
   // Analytics reads transcripts and Usage reads Claude Code's own stats file, so
   // both need seeding or those two tabs photograph as empty states.
   fx.writeTranscript(sandbox, {
@@ -163,6 +197,16 @@ test('capture README screenshots in both themes', async () => {
     await page.click('.nav-item[data-tab="sessions"]');
     await expect(page.locator('#sessionBody tr').first()).toBeVisible();
     await shoot(page, 'sessions-dark');
+
+    // History scans transcripts on first open, so it is given the same generous
+    // timeout Analytics gets rather than being photographed mid-scan.
+    await page.click('.nav-item[data-tab="history"]');
+    await expect(page.locator('#historyList .hist-row').first()).toBeVisible({ timeout: 20_000 });
+    await shoot(page, 'history-dark');
+
+    await page.click('.nav-item[data-tab="launchpad"]');
+    await expect(page.locator('#presetGrid .preset-card').first()).toBeVisible();
+    await shoot(page, 'launchpad-dark');
 
     await page.click('.nav-item[data-tab="analytics"]');
 
@@ -222,6 +266,14 @@ test('capture README screenshots in both themes', async () => {
     await page.click('.nav-item[data-tab="sessions"]');
     await expect(page.locator('#sessionBody tr').first()).toBeVisible();
     await shoot(page, 'sessions-light');
+
+    await page.click('.nav-item[data-tab="history"]');
+    await expect(page.locator('#historyList .hist-row').first()).toBeVisible({ timeout: 20_000 });
+    await shoot(page, 'history-light');
+
+    await page.click('.nav-item[data-tab="launchpad"]');
+    await expect(page.locator('#presetGrid .preset-card').first()).toBeVisible();
+    await shoot(page, 'launchpad-light');
 
     await page.click('.nav-item[data-tab="settings"]');
     await page.locator('#content').evaluate((el) => { el.scrollTop = 0; });

@@ -15,7 +15,7 @@
 const { test, expect } = require('@playwright/test');
 const fx = require('./fixtures');
 
-const TABS = ['dashboard', 'sessions', 'analytics', 'coverage', 'activity', 'settings', 'about'];
+const TABS = ['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about'];
 
 /** Widths worth checking: the design target, and the narrowest supported window. */
 const WIDTHS = [

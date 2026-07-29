@@ -86,6 +86,23 @@ const DEFAULTS = {
   policies: {},
 
   /**
+   * Launchpad presets — one saved session configuration per button.
+   *
+   * An array rather than a keyed object, because the order is the layout: these
+   * are buttons on a grid, and the user drags them into the order they think in.
+   * `id` is what a shortcut or a desktop `.lnk` names, so it has to outlive any
+   * reordering or rename.
+   *
+   * Empty by default. A preset is a launch instruction — a working directory, a
+   * model, and often a pre-prompt that runs unattended — and inventing plausible
+   * ones would mean shipping buttons that start real sessions in directories the
+   * user never chose. The tab explains itself and offers to make the first one.
+   */
+  launchpad: {
+    presets: [],
+  },
+
+  /**
    * Hook installation into Claude Code's settings.json.
    *
    * On by default: Lifeline cannot recover anything without its hooks registered,

@@ -447,12 +447,18 @@ test('resetting settings restores every default', async () => {
   expect(cfg.features.soundAlerts).toBe(false);
 });
 
-test('navigation reaches all five tabs and the about tab lists real paths', async () => {
+test('navigation reaches every tab and the about tab lists real paths', async () => {
   const sandbox = fx.makeSandbox('nav');
   ctx = await fx.launch(sandbox);
   const { page } = ctx;
 
-  for (const tab of ['sessions', 'activity', 'settings', 'about', 'dashboard']) {
+  // Read off the sidebar rather than hard-coded, so adding a tab without wiring
+  // its section — the exact bug History and Launchpad shipped with first — fails
+  // here instead of being invisible until someone clicks it.
+  const tabs = await page.locator('.nav-item').evaluateAll((els) => els.map((el) => el.dataset.tab));
+  expect(tabs).toEqual(['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about']);
+
+  for (const tab of tabs) {
     await page.click(`.nav-item[data-tab="${tab}"]`);
     await expect(page.locator(`.tab[data-tab="${tab}"]`)).toBeVisible();
     await expect(page.locator(`.nav-item[data-tab="${tab}"]`)).toHaveClass(/active/);
