@@ -114,6 +114,24 @@ test('capture README screenshots in both themes', async () => {
   // Hooks pre-installed so the shots show the healthy steady state, not the
   // first-run warning banner.
   fx.writeConfig(sandbox, { ui: { theme: 'dark', accent: 'violet', startMinimised: false } });
+  // Analytics reads transcripts and Usage reads Claude Code's own stats file, so
+  // both need seeding or those two tabs photograph as empty states.
+  fx.writeTranscript(sandbox, {
+    slug: 'payments-api',
+    id: 'a3f8c1d2-4b5e-4a91-8c3d-7e2f1b9a4c60',
+    title: 'Refactor the billing service',
+    cwd: 'C:/work/payments-api',
+    messages: 24,
+  });
+  fx.writeTranscript(sandbox, {
+    slug: 'telemetry-dashboard',
+    id: 'b7e2d4a9-1c3f-4e82-9d5a-6b8c2f1e7a34',
+    title: 'Add latency charts',
+    cwd: 'C:/work/telemetry-dashboard',
+    model: 'claude-sonnet-5',
+    messages: 12,
+  });
+  fx.writeClaudeStats(sandbox);
 
   const ctx = await fx.launch(sandbox);
   const { page } = ctx;
@@ -128,14 +146,34 @@ test('capture README screenshots in both themes', async () => {
     // Let the toast fade so it does not sit over the UI in the shots.
     await page.waitForTimeout(4200);
 
+    // Analytics first, before the dashboard. Transcripts are only scanned when
+    // this tab is opened, and the dashboard's "This week" card reads that scan —
+    // shooting the dashboard cold photographs three em-dashes and a prompt to
+    // open Analytics, which is honest behaviour but a poor advertisement.
+    await page.click('.nav-item[data-tab="analytics"]');
+    await expect(page.locator('#analyticsBodyRows tr').first()).toBeVisible({ timeout: 20_000 });
+    await shoot(page, 'analytics-dark');
+
     await page.click('.nav-item[data-tab="dashboard"]');
     await expect(page.locator('#hookBanner')).toBeHidden();
     await expect(page.locator('#recentTimeline .tl-item').first()).toBeVisible();
+    await expect(page.locator('#dashWeekHours')).not.toHaveText('—');
     await shoot(page, 'dashboard-dark');
 
     await page.click('.nav-item[data-tab="sessions"]');
     await expect(page.locator('#sessionBody tr').first()).toBeVisible();
     await shoot(page, 'sessions-dark');
+
+    await page.click('.nav-item[data-tab="analytics"]');
+
+    await page.click('#analyticsViews .seg-btn[data-view="usage"]');
+    await expect(page.locator('#usageContent')).toBeVisible();
+    await expect(page.locator('#usageMissing')).toBeHidden();
+    await shoot(page, 'usage-dark');
+
+    await page.click('.nav-item[data-tab="coverage"]');
+    await expect(page.locator('#coverageClasses .cov-card').first()).toBeVisible();
+    await shoot(page, 'coverage-dark');
 
     await page.click('.nav-item[data-tab="activity"]');
     await expect(page.locator('#activityTimeline .tl-item').first()).toBeVisible();
@@ -152,6 +190,12 @@ test('capture README screenshots in both themes', async () => {
     await page.click('.nav-item[data-tab="about"]');
     await shoot(page, 'about-dark');
 
+    // The paths and provenance sit below the fold, and they are the part of this
+    // page worth showing: where data actually lives, and what built it.
+    await page.locator('.built-with').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(250);
+    await shoot(page, 'about-detail-dark');
+
     // Light theme.
     await page.click('#themeToggle');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -160,7 +204,28 @@ test('capture README screenshots in both themes', async () => {
     await page.click('.nav-item[data-tab="dashboard"]');
     await shoot(page, 'dashboard-light');
 
+    await page.click('.nav-item[data-tab="coverage"]');
+    await expect(page.locator('#coverageClasses .cov-card').first()).toBeVisible();
+    await shoot(page, 'coverage-light');
+
+    await page.click('.nav-item[data-tab="analytics"]');
+    // Back to the work view: the segmented choice is sticky, and the dark pass
+    // left it on Usage.
+    await page.click('#analyticsViews .seg-btn[data-view="work"]');
+    await expect(page.locator('#analyticsBodyRows tr').first()).toBeVisible({ timeout: 20_000 });
+    // Scroll position is sticky too, and the dark pass scrolled down to reach the
+    // policy table — without this the page header sits above the top of the shot.
+    await page.locator('#content').evaluate((el) => { el.scrollTop = 0; });
+    await page.waitForTimeout(250);
+    await shoot(page, 'analytics-light');
+
+    await page.click('.nav-item[data-tab="sessions"]');
+    await expect(page.locator('#sessionBody tr').first()).toBeVisible();
+    await shoot(page, 'sessions-light');
+
     await page.click('.nav-item[data-tab="settings"]');
+    await page.locator('#content').evaluate((el) => { el.scrollTop = 0; });
+    await page.waitForTimeout(250);
     await shoot(page, 'settings-light');
     await page.locator('#policyList').scrollIntoViewIfNeeded();
     await page.waitForTimeout(250);

@@ -181,29 +181,46 @@ test('pausing protection changes the status and persists to disk', async () => {
   await expect.poll(() => fx.savedValue(sandbox, 'enabled')).toBe(true);
 });
 
-test('the hook warning banner appears only until hooks are installed', async () => {
-  const sandbox = fx.makeSandbox('hookbanner');
+test('hooks install themselves on first launch, so a fresh install protects nothing by accident', async () => {
+  const sandbox = fx.makeSandbox('autoinstall');
   ctx = await fx.launch(sandbox);
   const { page } = ctx;
 
-  await expect(page.locator('#hookBanner')).toBeVisible();
-  await page.click('#btnInstallHooks');
-
+  // The whole point of auto-install: nobody has to find a button for recovery to
+  // work. So the warning banner must never appear on a clean machine.
   await expect(page.locator('#hookBanner')).toBeHidden();
-  await expect(latestToast(page)).toContainText('Hooks installed');
 
   // The settings actually written must be what Claude Code will honour.
+  await expect.poll(() => Object.keys((fx.readClaudeSettings(sandbox) || {}).hooks || {})).toContain('StopFailure');
   const settings = fx.readClaudeSettings(sandbox);
-  expect(Object.keys(settings.hooks)).toContain('StopFailure');
   const hook = settings.hooks.StopFailure[0].hooks[0];
   expect(hook.asyncRewake).toBe(true);
   expect(hook.command).toMatch(/lifeline-hook\.js/);
 });
 
+test('with auto-install off the banner warns, and the button still installs', async () => {
+  const sandbox = fx.makeSandbox('hookbanner');
+  // Opting out is what makes the banner reachable at all — and the banner is the
+  // only thing telling a user in that state that nothing is protected.
+  fx.writeConfig(sandbox, { hooks: { autoInstall: false, optedOut: false } });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await expect(page.locator('#hookBanner')).toBeVisible();
+  expect(fx.readClaudeSettings(sandbox)).toBe(null);
+
+  await page.click('#btnInstallHooks');
+
+  await expect(page.locator('#hookBanner')).toBeHidden();
+  await expect(latestToast(page)).toContainText('Hooks installed');
+  expect(Object.keys(fx.readClaudeSettings(sandbox).hooks)).toContain('StopFailure');
+});
+
 test('feature toggles persist and survive a restart', async () => {
   const sandbox = fx.makeSandbox('toggles');
   ctx = await fx.launch(sandbox);
-  await ctx.page.click('.nav-item[data-tab="settings"]');
+  // Recovery behaviours live on Coverage; Settings keeps the tuning knobs.
+  await ctx.page.click('.nav-item[data-tab="coverage"]');
 
   const row = ctx.page.locator('.toggle-row').filter({ hasText: 'Nudge after tool timeouts' });
   const box = row.locator('input[type=checkbox]');
@@ -217,7 +234,7 @@ test('feature toggles persist and survive a restart', async () => {
   // rather than a session-local UI state.
   await fx.close(ctx);
   ctx = await fx.launch(sandbox);
-  await ctx.page.click('.nav-item[data-tab="settings"]');
+  await ctx.page.click('.nav-item[data-tab="coverage"]');
   await expect(
     ctx.page.locator('.toggle-row').filter({ hasText: 'Nudge after tool timeouts' }).locator('input[type=checkbox]')
   ).toBeChecked();
@@ -265,24 +282,23 @@ test('a partial save does not blank out unrelated settings', async () => {
   expect(cfg.limits.maxAttemptsPerPrompt).toBe(5);
 });
 
-test('policies for non-retryable classes are labelled manual and off by default', async () => {
+test('per-failure tuning is disabled for classes that never retry', async () => {
   const sandbox = fx.makeSandbox('policies');
   ctx = await fx.launch(sandbox);
   const { page } = ctx;
   await page.click('.nav-item[data-tab="settings"]');
 
-  // All ten real error classes must be configurable.
+  // All ten real error classes must be tunable.
   await expect(page.locator('#policyList .policy-row')).toHaveCount(10);
 
   const billing = page.locator('.policy-row').filter({ hasText: 'Billing problem' });
-  await expect(billing.locator('.chip')).toHaveText('manual');
-  await expect(billing.locator('input[type=checkbox]')).not.toBeChecked();
+  await expect(billing.locator('.chip')).toHaveText('alert only');
   // Numeric fields are disabled while the class is not resumed — a wait time on
   // something that never retries would be meaningless.
   await expect(billing.locator('input[type=number]').first()).toBeDisabled();
 
   const rate = page.locator('.policy-row').filter({ hasText: 'Rate limited' });
-  await expect(rate.locator('input[type=checkbox]')).toBeChecked();
+  await expect(rate.locator('input[type=number]').first()).toBeEnabled();
   await expect(rate.locator('input[type=number]').first()).toHaveValue('60000');
 });
 
@@ -481,15 +497,415 @@ test('installing hooks leaves a user’s unrelated hooks untouched', async () =>
   expect(settings.hooks.StopFailure).toBeTruthy();
 });
 
-test('the coverage panel explains all ten failure classes', async () => {
+/* ============================== coverage =============================== */
+
+test('the coverage tab lists all ten failure classes with their outcomes', async () => {
   const sandbox = fx.makeSandbox('coverage');
   ctx = await fx.launch(sandbox);
-  const items = ctx.page.locator('#coverageList .cov-item');
-  await expect(items).toHaveCount(10);
+  await ctx.page.click('.nav-item[data-tab="coverage"]');
+
+  const cards = ctx.page.locator('#coverageClasses .cov-card');
+  await expect(cards).toHaveCount(10);
 
   // The retry asymmetry is the design's core claim, so it must be visible.
-  await expect(items.filter({ hasText: 'Rate limited' })).toContainText('Auto-resume');
-  await expect(items.filter({ hasText: 'Context overflow' })).toContainText('Compact + resume');
-  await expect(items.filter({ hasText: 'Authentication failed' })).toContainText('Alert you');
-  await expect(items.filter({ hasText: 'Billing problem' })).toContainText('Alert you');
+  await expect(cards.filter({ hasText: 'Rate limited' })).toContainText('Auto-resume');
+  await expect(cards.filter({ hasText: 'Context overflow' })).toContainText('Compact + resume');
+  await expect(cards.filter({ hasText: 'Authentication failed' })).toContainText('Alert you');
+  await expect(cards.filter({ hasText: 'Billing problem' })).toContainText('Alert you');
+
+  // State is carried on the card, so "covered" is legible at a glance.
+  await expect(cards.filter({ hasText: 'Rate limited' })).toHaveAttribute('data-on', 'true');
+  await expect(cards.filter({ hasText: 'Billing problem' })).toHaveAttribute('data-on', 'false');
+});
+
+test('the dashboard coverage widget shows totals that match the coverage tab', async () => {
+  const sandbox = fx.makeSandbox('cov-widget');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  // Totals only on the dashboard — the per-class detail is a tab away.
+  const enabled = await page.locator('#covEnabled').textContent();
+  const disabled = await page.locator('#covDisabled').textContent();
+  expect(Number(enabled)).toBeGreaterThan(0);
+  expect(Number(disabled)).toBeGreaterThan(0);
+
+  await page.click('.side-stack [data-goto="coverage"]');
+  await expect(page.locator('.tab[data-tab="coverage"]')).toBeVisible();
+  await expect(page.locator('#covStatEnabled')).toHaveText(enabled.trim());
+  await expect(page.locator('#covStatDisabled')).toHaveText(disabled.trim());
+});
+
+test('turning a class off in coverage persists and collapses it to alert-only', async () => {
+  const sandbox = fx.makeSandbox('cov-off');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="coverage"]');
+
+  const card = page.locator('#coverageClasses .cov-card').filter({ hasText: 'Rate limited' });
+  await card.locator('.switch input').click();
+
+  await expect(card).toHaveAttribute('data-on', 'false');
+  await expect(card).toContainText('Alert you');
+  await expect.poll(() => fx.savedValue(sandbox, 'policies.rate_limit.resume')).toBe(false);
+});
+
+test('enabling a hopeless class is held back by the guard, and says so', async () => {
+  const sandbox = fx.makeSandbox('cov-guard');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="coverage"]');
+
+  const card = page.locator('#coverageClasses .cov-card').filter({ hasText: 'Authentication failed' });
+  await card.locator('.switch input').click();
+
+  // The switch is honoured in config, but the resolved outcome is still notify —
+  // and the card explains the discrepancy rather than looking broken.
+  await expect.poll(() => fx.savedValue(sandbox, 'policies.authentication_failed.resume')).toBe(true);
+  await expect(card.locator('.cov-card-blocked')).toBeVisible();
+  await expect(card).toContainText('Alert you');
+  await expect(card).toHaveAttribute('data-on', 'false');
+
+  // And the way out is on the card itself.
+  await card.locator('.cov-card-blocked .link-btn').click();
+  await expect.poll(() => fx.savedValue(sandbox, 'features.respectNonRetryable')).toBe(false);
+  await expect(card).toHaveAttribute('data-on', 'true');
+  await expect(card).toContainText('Auto-resume');
+});
+
+test('“enable everything” does not silently disarm the safety guard', async () => {
+  const sandbox = fx.makeSandbox('cov-all');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="coverage"]');
+  await page.click('#btnCoverageAll');
+
+  await expect(latestToast(page)).toContainText('still alert');
+  await expect.poll(() => fx.savedValue(sandbox, 'features.toolFailureRecovery')).toBe(true);
+  await expect.poll(() => fx.savedValue(sandbox, 'features.respectNonRetryable')).toBe(true);
+});
+
+/* ============================== analytics ============================== */
+
+test('analytics reports on the sessions it finds in transcripts', async () => {
+  const sandbox = fx.makeSandbox('analytics');
+  fx.writeTranscript(sandbox, {
+    slug: 'payments-api',
+    id: 'an-1',
+    title: 'Refactor the billing module',
+    cwd: 'C:/work/payments-api',
+    messages: 6,
+  });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="analytics"]');
+  // A scan runs in a worker, so the numbers arrive a moment after the tab does.
+  await expect(page.locator('#anSessions')).toHaveText('1', { timeout: 20_000 });
+  await expect(page.locator('#anHours')).not.toHaveText('—');
+
+  // Cost is derived, and the UI has to say so — an authoritative-looking number
+  // that is really an estimate is the failure mode.
+  await expect(page.locator('#estimateNote')).toContainText('estimate');
+
+  const row = page.locator('#analyticsBodyRows tr').first();
+  await expect(row).toContainText('Refactor the billing module');
+  await expect(row).toContainText('payments-api');
+});
+
+test('the activity chart keeps a bar per day even with nothing recorded', async () => {
+  const sandbox = fx.makeSandbox('analytics-empty');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="analytics"]');
+
+  await expect(page.locator('#anSessions')).toHaveText('0', { timeout: 20_000 });
+  await expect(page.locator('#analyticsEmpty')).toBeVisible();
+  await expect(page.locator('#chartTag')).toContainText('no activity');
+});
+
+test('the range selector switches the chart from days to months', async () => {
+  const sandbox = fx.makeSandbox('analytics-range');
+  fx.writeTranscript(sandbox, { id: 'an-r', messages: 4 });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="analytics"]');
+  await expect(page.locator('#anSessions')).toHaveText('1', { timeout: 20_000 });
+
+  await expect(page.locator('#chartTitle')).toHaveText('Daily activity');
+  await expect(page.locator('#activityChart .chart-col')).toHaveCount(7);
+
+  // A year at day resolution is 365 bars, which is why the grain changes.
+  await page.selectOption('#analyticsRange', 'year');
+  await expect(page.locator('#chartTitle')).toHaveText('Monthly activity');
+  await expect(page.locator('#activityChart .chart-col')).toHaveCount(12);
+});
+
+test('turning analytics off stops the scan and explains why the tab is empty', async () => {
+  const sandbox = fx.makeSandbox('analytics-off');
+  fx.writeConfig(sandbox, { version: 1, analytics: { enabled: false } });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="analytics"]');
+  await expect(page.locator('#analyticsOffBanner')).toBeVisible();
+  await expect(page.locator('#analyticsBody')).toBeHidden();
+  // Both views read the same switch, so neither is left visible and empty.
+  await expect(page.locator('#usageBody')).toBeHidden();
+  await expect(page.locator('#dashWeekHint')).toBeHidden();
+});
+
+/* ---------------------------- usage & models ---------------------------- */
+
+test('the usage view reads Claude Code’s own /usage statistics', async () => {
+  const sandbox = fx.makeSandbox('usage');
+  fx.writeClaudeStats(sandbox, {
+    totalSessions: 267,
+    totalMessages: 107842,
+    modelUsage: {
+      'claude-opus-4-8': { inputTokens: 1e6, outputTokens: 2e6, cacheReadInputTokens: 5e8, costUSD: 0 },
+      'claude-haiku-4-5-20251001': { inputTokens: 1e7, outputTokens: 2e7, cacheReadInputTokens: 9e8, costUSD: 0 },
+    },
+  });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="analytics"]');
+  await page.click('#analyticsViews .seg-btn[data-view="usage"]');
+
+  await expect(page.locator('#usSessions')).toHaveText('267', { timeout: 20_000 });
+  await expect(page.locator('#usMessages')).toHaveText('107.8K');
+  await expect(page.locator('#usageMissing')).toBeHidden();
+
+  // The range selector has no meaning for whole-history totals, so it goes away
+  // rather than sitting there inert.
+  await expect(page.locator('#analyticsRange')).toBeHidden();
+
+  // Ordered by cost, not tokens: haiku has more tokens and costs far less.
+  const rows = page.locator('#usModelBody tr');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText('opus-4-8');
+
+  // Cost is Lifeline's, because /usage reports $0 per model on a subscription.
+  await expect(page.locator('#usageNote')).toContainText("cost column is Lifeline's");
+  await expect(page.locator('#usCost')).not.toHaveText('—');
+
+  await expect(page.locator('#usHourChart .chart-col')).toHaveCount(24);
+  await expect(page.locator('#usRecords .hero-metric')).toHaveCount(4);
+});
+
+test('with no stats file the usage view asks the user to run /usage', async () => {
+  const sandbox = fx.makeSandbox('usage-missing');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="analytics"]');
+  await page.click('#analyticsViews .seg-btn[data-view="usage"]');
+
+  await expect(page.locator('#usageMissing')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#usageMissing')).toContainText('/usage');
+  await expect(page.locator('#usageContent')).toBeHidden();
+});
+
+test('a stats file from an unknown version is refused rather than misread', async () => {
+  const sandbox = fx.makeSandbox('usage-version');
+  // The real risk: a future Claude Code renames fields, an optimistic reader
+  // finds something, and the app shows a confidently wrong total.
+  fx.writeClaudeStats(sandbox, { version: 99, totalSessions: 5 });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="analytics"]');
+  await page.click('#analyticsViews .seg-btn[data-view="usage"]');
+  await expect(page.locator('#usageMissing')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('#usSessions')).not.toHaveText('5');
+});
+
+/* =========================== settings grouping ========================== */
+
+test('settings are grouped, and the jump list scrolls to each group', async () => {
+  const sandbox = fx.makeSandbox('settings-nav');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="settings"]');
+
+  // One entry per group: the page was previously one long undifferentiated list.
+  const items = page.locator('#settingsNav .settings-nav-item');
+  await expect(items).toHaveCount(8);
+  await expect(items.first()).toHaveText('Installation');
+
+  await items.filter({ hasText: 'Analytics & cost' }).click();
+  await expect(page.locator('#setAnalytics')).toBeInViewport();
+  await expect(page.locator('#setAnalytics')).toHaveClass(/flash/);
+});
+
+test('a rate override is saved whole, and reset clears it', async () => {
+  const sandbox = fx.makeSandbox('rates');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="settings"]');
+
+  const row = page.locator('#ratesBody tr').first();
+  const model = (await row.locator('.cell-main').textContent()).trim();
+  await row.locator('input').first().fill('123');
+  await row.locator('input').first().blur();
+
+  // The whole row is written, not just the edited cell: a partial override would
+  // let the other three rates fall back to the mid-tier default. And the values
+  // filled in must be the model's real published rates — seeding them with zeros
+  // would price every other token kind at nothing, which reads as a suspiciously
+  // cheap day rather than as a bug.
+  await expect.poll(() => fx.savedValue(sandbox, `analytics.rates.${model}.input`)).toBe(123);
+  const { RATES } = require('../../src/shared/pricing');
+  for (const kind of ['output', 'cacheWrite', 'cacheRead']) {
+    await expect.poll(() => fx.savedValue(sandbox, `analytics.rates.${model}.${kind}`)).toBe(RATES[model][kind]);
+  }
+
+  await page.click('#btnResetRates');
+  await expect.poll(() => fx.savedValue(sandbox, 'analytics.rates')).toEqual({});
+});
+
+/* ================================ about ================================= */
+
+test('the about page reports live figures, not static copy', async () => {
+  const sandbox = fx.makeSandbox('about');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="about"]');
+
+  await expect(page.locator('#aboutMetrics .hero-metric')).toHaveCount(4);
+  await expect(page.locator('#aboutMetrics')).toContainText('checks enabled');
+  await expect(page.locator('#aboutSteps .step')).toHaveCount(4);
+  await expect(page.locator('#aboutRetryCards .split-card')).toHaveCount(2);
+
+  // Paths are the practical part of an about page: they have to be real and
+  // openable, not decoration.
+  const rows = page.locator('#aboutPaths .path-row');
+  await expect(rows).toHaveCount(5);
+  await expect(rows.filter({ hasText: 'Data folder' })).toContainText(sandbox.lifelineHome);
+
+  // The provenance credit, which is a claim about the project and not decoration.
+  await expect(page.locator('.built-with')).toContainText('Claude Opus 5');
+  await expect(page.locator('.built-with')).toContainText('Claude Code');
+  await expect(page.locator('#aboutFoot')).toContainText('Not affiliated with Anthropic');
+});
+
+test('the about recovery count agrees with the timeline, including recoveries older than the ledger keeps', async () => {
+  const sandbox = fx.makeSandbox('aboutcount');
+  const hour = 3_600_000;
+  // Deliberately straddling the ledger's 48-hour prune window. The count used to
+  // come from the ledger's attempt total, so on any machine older than two days
+  // the about page read "0 recoveries logged" directly above a list of them —
+  // exactly the inconsistency the dashboard already guards against.
+  fx.writeEvents(sandbox, [
+    { at: Date.now() - 200 * hour, kind: 'recovered', sessionId: 'old1', errorClass: 'overloaded', label: 'API overloaded', strategy: 'resume' },
+    { at: Date.now() - 100 * hour, kind: 'recovered', sessionId: 'old2', errorClass: 'rate_limit', label: 'Rate limited', strategy: 'resume' },
+    { at: Date.now() - 2 * hour, kind: 'recovered', sessionId: 'new1', errorClass: 'server_error', label: 'Server error', strategy: 'resume' },
+  ]);
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  // The dashboard's figure is scoped to today, and stays that way.
+  await expect(page.locator('#statRecovered')).toHaveText('1');
+
+  await page.click('.nav-item[data-tab="about"]');
+  const logged = page.locator('#aboutMetrics .hero-metric').filter({ hasText: 'recoveries logged' });
+  await expect(logged.locator('.hero-metric-num')).toHaveText('3');
+
+  // And the same three are actually listed, so the number is not just a number.
+  // Filtered, because the activity tab shows every kind — including whatever the
+  // app logged about its own startup.
+  await page.click('.nav-item[data-tab="activity"]');
+  await page.selectOption('#activityFilter', 'recovered');
+  await expect(page.locator('#activityTimeline .tl-item')).toHaveCount(3);
+});
+
+test('outbound links name a key and are opened by main, never loaded in-app', async () => {
+  const sandbox = fx.makeSandbox('links');
+  ctx = await fx.launch(sandbox);
+  const { page, app } = ctx;
+
+  // The security property, asserted in the markup: a URL anywhere in the
+  // renderer would mean an injected string could become a browser launch.
+  const keys = await page.locator('[data-link]').evaluateAll((els) => els.map((e) => e.dataset.link));
+  expect(keys.length).toBeGreaterThan(0);
+  expect([...new Set(keys)].sort()).toEqual(['issues', 'releases', 'repo']);
+  for (const k of keys) expect(k).not.toMatch(/https?:/);
+
+  // Every key must actually resolve, or a button would be a silent no-op.
+  for (const key of ['repo', 'releases', 'issues']) {
+    const opened = await app.evaluate(async ({ shell, BrowserWindow }, k) => {
+      const calls = [];
+      const real = shell.openExternal;
+      shell.openExternal = (url) => {
+        calls.push(url);
+        return Promise.resolve();
+      };
+      try {
+        // Invoked the way the renderer does it, through the preload bridge, so
+        // this exercises the real channel rather than a copy of the URL table.
+        const win = BrowserWindow.getAllWindows()[0];
+        await win.webContents.executeJavaScript(`window.lifeline.openLink(${JSON.stringify(k)})`);
+        return calls;
+      } finally {
+        shell.openExternal = real;
+      }
+    }, key);
+    expect(opened.length, `${key} did not resolve to a URL`).toBe(1);
+    expect(opened[0]).toMatch(/^https:\/\/github\.com\/.+claude-lifeline/);
+  }
+
+  // And an unknown key opens nothing rather than falling through to something.
+  const stray = await app.evaluate(async ({ shell, BrowserWindow }) => {
+    const calls = [];
+    const real = shell.openExternal;
+    shell.openExternal = (url) => {
+      calls.push(url);
+      return Promise.resolve();
+    };
+    try {
+      const win = BrowserWindow.getAllWindows()[0];
+      const ok = await win.webContents.executeJavaScript(
+        'window.lifeline.openLink("https://evil.example/")'
+      );
+      return { calls, ok };
+    } finally {
+      shell.openExternal = real;
+    }
+  });
+  expect(stray.calls).toEqual([]);
+  expect(stray.ok).toBe(false);
+});
+
+/* ============================== migration ============================== */
+
+test('a config from an older schema is upgraded rather than reset', async () => {
+  const sandbox = fx.makeSandbox('migrate');
+  // Settings a user would notice losing.
+  fx.writeConfig(sandbox, {
+    version: 1,
+    enabled: false,
+    ui: { accent: 'amber', theme: 'light' },
+    limits: { maxAttemptsPerDay: 42 },
+  });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await expect(page.locator('#statusPill')).toHaveAttribute('data-status', 'paused');
+  await page.click('.nav-item[data-tab="settings"]');
+  await expect(page.locator('#themeSelect')).toHaveValue('light');
+  expect(fx.savedValue(sandbox, 'limits.maxAttemptsPerDay')).toBe(42);
+});
+
+test('settings written by a newer version are preserved, not stripped', async () => {
+  const sandbox = fx.makeSandbox('migrate-newer');
+  fx.writeConfig(sandbox, { version: 99, enabled: true, someFutureFeature: { nested: true } });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  // Changing anything rewrites the file; the unknown key has to come through, or
+  // installing an older build once would cost the user their v2 settings.
+  await page.click('.nav-item[data-tab="settings"]');
+  await page.click('#themeSelect');
+  await page.selectOption('#themeSelect', 'dark');
+  await expect.poll(() => fx.savedValue(sandbox, 'someFutureFeature.nested')).toBe(true);
 });
