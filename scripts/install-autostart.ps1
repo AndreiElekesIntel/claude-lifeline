@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Starts Claude Lifeline automatically when you log in.
 
@@ -85,7 +85,7 @@ if ($target) {
   }
   $target  = $electron
   $argList = "`"$repoRoot`""
-  Write-Warn2 'No installed build found — pointing the task at the development checkout.'
+  Write-Warn2 'No installed build found - pointing the task at the development checkout.'
   Write-Info  "Run 'npm run build' and re-run this script for a standalone install."
 }
 
@@ -98,7 +98,7 @@ $action = if ($argList) {
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 
 # StartWhenAvailable catches the case where the machine was asleep at logon time.
-# ExecutionTimeLimit 0 means "never kill it" — this is a long-running tray agent,
+# ExecutionTimeLimit 0 means "never kill it" - this is a long-running tray agent,
 # and the default 3-day limit would silently stop it.
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
@@ -130,4 +130,4 @@ Write-Info "Task name: $TaskName   (manage it in Task Scheduler)"
 Write-Info 'Start it now without logging out:  Start-ScheduledTask -TaskName "Claude Lifeline"'
 Write-Host ''
 Write-Info 'Reminder: this only autostarts the tray app. Recovery runs inside Claude Code via the hooks,'
-Write-Info "so run 'npm run install-hook' if you have not already — that is the part that resumes sessions."
+Write-Info "so run 'npm run install-hook' if you have not already - that is the part that resumes sessions."
