@@ -23,7 +23,7 @@
 const fs = require('fs');
 
 const { loadConfig, projectAllowed } = require('../shared/config');
-const { effectivePolicy } = require('../shared/policy');
+const { effectivePolicy, classify } = require('../shared/policy');
 const ledger = require('../shared/ledger');
 const eventlog = require('../shared/eventlog');
 const { hookLogFile } = require('../shared/paths');
@@ -53,17 +53,44 @@ function readStdin() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * A one-line, human-readable rendering of a non-string `error` payload.
+ *
+ * Only for the log and the injected context: the classification decision is
+ * classify()'s, not this function's. Truncated because an SDK error can carry a
+ * full response body, and this ends up inside the model's context.
+ */
+function errorText(error) {
+  if (error == null) return null;
+  if (typeof error === 'string') return error;
+  if (typeof error !== 'object') return String(error);
+  const msg = error.message || error.error || error.detail;
+  const text = typeof msg === 'string' ? msg : safeJson(error);
+  return String(text).replace(/\s+/g, ' ').trim().slice(0, 300) || null;
+}
+
+function safeJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * The text injected back into the session.
  *
  * It states what failed and that work already done should not be repeated —
  * without that, a resumed model tends to start the task over.
  */
-function buildResumeMessage({ policy, errorClass, attemptNumber, lastAssistantMessage, waitedMs }) {
+function buildResumeMessage({ policy, errorClass, rawError, attemptNumber, lastAssistantMessage, waitedMs }) {
   const lines = [];
   lines.push(policy.message || 'The previous turn ended because of an API error. Continue exactly where you left off.');
   lines.push('');
   lines.push('--- Claude Lifeline recovery context ---');
   lines.push(`Failure class: ${errorClass}`);
+  // Only when it adds something: for a bare class string this would just repeat
+  // the line above.
+  if (rawError) lines.push(`Reported error: ${rawError}`);
   lines.push(`Recovery attempt: ${attemptNumber}${policy.maxAttempts ? ` of ${policy.maxAttempts}` : ''}`);
   if (waitedMs > 0) lines.push(`Waited ${Math.round(waitedMs / 1000)}s before resuming.`);
   if (policy.strategy === 'compact') {
@@ -93,10 +120,23 @@ async function main() {
   const sessionId = payload.session_id || 'unknown';
   const promptId = payload.prompt_id || null;
   const cwd = payload.cwd || null;
-  const errorClass = payload.error || 'unknown';
+  /**
+   * Normalised up front, so everything downstream — the policy lookup, the
+   * ledger key, the event log, and the text injected into the session — talks
+   * about the same class name.
+   *
+   * Claude Code documents this field as a class string, but it is also observed
+   * carrying an SDK error object. Passing that through unnormalised produced a
+   * literal "Failure class: [object Object]" in the resumed session and filed a
+   * 429 under `unknown`, which retries sooner and more often than a rate limit
+   * should. See classify() in policy.js.
+   */
+  const errorClass = classify(payload.error);
+  /** Kept only for the log, where the original text is the useful diagnostic. */
+  const rawError = typeof payload.error === 'string' ? null : errorText(payload.error);
   const lastAssistantMessage = payload.last_assistant_message || null;
 
-  debug(cfg, `event=${event} class=${errorClass} session=${sessionId}`);
+  debug(cfg, `event=${event} class=${errorClass} raw=${rawError || payload.error} session=${sessionId}`);
 
   if (!cfg.enabled) {
     eventlog.append({ kind: eventlog.KINDS.SKIPPED, sessionId, cwd, errorClass, reason: 'disabled', detail: 'Lifeline is turned off.' });
@@ -139,8 +179,13 @@ async function main() {
       errorClass,
       label: policy.label,
       reason: 'non_retryable',
-      detail: policy.reason,
+      // When the class was switched on but held back by the safety feature, say
+      // so — otherwise the user sees a notify for something they just enabled.
+      detail: policy.blockedBy
+        ? `${policy.reason} Recovery for this class is enabled but held back by "Never retry hopeless failures" in Coverage.`
+        : policy.reason,
       needsAttention: true,
+      rawError,
       lastAssistantMessage,
     });
     return EXIT_NOOP;
@@ -194,11 +239,12 @@ async function main() {
     strategy: policy.strategy,
     attemptNumber,
     waitedMs,
-    detail: `Resumed after ${policy.label.toLowerCase()} (attempt ${attemptNumber}).`,
+    rawError,
+    detail: `Resumed after ${policy.label.toLowerCase()} (attempt ${attemptNumber}).${rawError ? ` Reported: ${rawError}` : ''}`,
   });
 
   // stderr is what Claude Code injects; exit 2 is what wakes the model.
-  process.stderr.write(buildResumeMessage({ policy, errorClass, attemptNumber, lastAssistantMessage, waitedMs }));
+  process.stderr.write(buildResumeMessage({ policy, errorClass, rawError, attemptNumber, lastAssistantMessage, waitedMs }));
   return EXIT_REWAKE;
 }
 

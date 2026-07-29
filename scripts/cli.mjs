@@ -8,12 +8,14 @@
  *
  *   node scripts/cli.mjs install     register the recovery hooks
  *   node scripts/cli.mjs uninstall   remove them
+ *   node scripts/cli.mjs pin         run recovery from a frozen copy, not this tree
  *   node scripts/cli.mjs doctor      check that everything is wired up
  *   node scripts/cli.mjs status      one-line summary
  */
 
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -57,6 +59,61 @@ function cmdInstall() {
   return 0;
 }
 
+/**
+ * Copy the recovery code into Lifeline's own data folder and point the hooks
+ * there instead of at this checkout.
+ *
+ * Why this exists: settings.json stores an absolute path to the hook, and by
+ * default that path is the working tree. That is exactly right for a user who
+ * installed the app and never touches it — and exactly wrong while developing,
+ * because Claude Code will run whatever is on disk the moment a turn fails. A
+ * failure landing mid-save runs a half-written file, in a process whose whole
+ * job is to not make a bad situation worse.
+ *
+ * A frozen copy decouples the two: edit the tree freely, and recovery keeps
+ * running the version that was working when you pinned it. Re-run `pin` to
+ * publish your changes, `install` to go back to live-from-tree.
+ *
+ * Only the files the hook actually loads are copied — src/hook and src/shared.
+ * The Electron app is not part of the recovery path and is deliberately left out.
+ */
+function cmdPin() {
+  const dest = path.join(paths.lifelineHome(), 'runtime');
+  // Replaced wholesale rather than merged: a stale file left behind from a
+  // previous pin is the one thing worse than no pin at all.
+  fs.rmSync(dest, { recursive: true, force: true });
+  for (const dir of ['src/hook', 'src/shared']) {
+    fs.cpSync(path.join(root, dir), path.join(dest, dir), { recursive: true });
+  }
+
+  const entry = path.join(dest, 'src', 'hook', 'lifeline-hook.js');
+  if (!fs.existsSync(entry)) throw new Error(`Snapshot failed: ${entry} was not created.`);
+
+  // Provenance, so a future you can tell which commit is actually running.
+  let rev = 'unknown';
+  try {
+    rev = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  } catch {
+    /* not a git checkout, or no git — the stamp is a convenience, not a requirement */
+  }
+  fs.writeFileSync(
+    path.join(dest, 'PINNED.json'),
+    JSON.stringify({ pinnedAt: new Date().toISOString(), source: root, commit: rev }, null, 2),
+    'utf8'
+  );
+
+  const res = installer.install({ hookEntry: entry });
+  console.log(ok('✓') + ` Recovery pinned to a frozen copy  ${dim(`(commit ${rev})`)}`);
+  console.log(dim(`  Snapshot: ${dest}`));
+  console.log(dim(`  Hooks now run: ${entry}`));
+  if (res.backup) console.log(dim(`  Settings backup: ${res.backup}`));
+  console.log('');
+  console.log('You can now edit the source tree without affecting live recovery.');
+  console.log(dim('Re-run `node scripts/cli.mjs pin` to publish changes, or `install` to track the tree again.'));
+  console.log(dim('Claude Code loads hooks at startup, so restart a session for this to take effect.'));
+  return 0;
+}
+
 function cmdUninstall() {
   const res = installer.uninstall();
   if (!res.removed.length) {
@@ -66,6 +123,37 @@ function cmdUninstall() {
   console.log(ok('✓') + ` Removed hooks from: ${res.removed.join(', ')}`);
   if (res.backup) console.log(dim(`  Backup: ${res.backup}`));
   return 0;
+}
+
+/** The hook path settings.json actually contains, or null if none is registered. */
+function registeredHookPath() {
+  try {
+    const settings = JSON.parse(fs.readFileSync(paths.claudeSettingsFile(), 'utf8'));
+    for (const list of Object.values(settings.hooks || {})) {
+      if (!Array.isArray(list)) continue;
+      for (const group of list) {
+        for (const h of group.hooks || []) {
+          // The command is `node "<path>"`, so the quoted argument is the path.
+          const m = /^node\s+"([^"]+)"/.exec(String(h.command || ''));
+          if (m && m[1].includes('lifeline-hook')) return m[1];
+        }
+      }
+    }
+  } catch {
+    /* unreadable settings is reported separately by the registration check */
+  }
+  return null;
+}
+
+/** Metadata for the frozen snapshot, if one has been created. */
+function pinInfo() {
+  const dir = path.join(paths.lifelineHome(), 'runtime');
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'PINNED.json'), 'utf8'));
+    return { dir, ...meta };
+  } catch {
+    return null;
+  }
 }
 
 /** Everything that has to be true for a session to actually get resumed. */
@@ -86,12 +174,23 @@ function cmdDoctor() {
     problems.push('Upgrade Node to 20 or newer.');
   }
 
-  // 2. The hook file exists where settings.json points.
-  const hook = paths.hookEntry();
+  // 2. The hook file exists where settings.json actually points — which is not
+  // necessarily this checkout, since `pin` can redirect it to a snapshot.
+  const registered = registeredHookPath();
+  const hook = registered || paths.hookEntry();
   if (fs.existsSync(hook)) line('ok', 'Hook script present', hook);
   else {
     line('fail', 'Hook script missing', hook);
-    problems.push('The hook file is missing — reinstall the project.');
+    problems.push('The hook file is missing — run `npm run install-hook` to repoint it.');
+  }
+
+  const pin = pinInfo();
+  if (pin && registered && registered.startsWith(pin.dir)) {
+    line('ok', 'Running a pinned snapshot', `commit ${pin.commit}, pinned ${pin.pinnedAt}`);
+  } else if (pin) {
+    // A leftover snapshot that nothing points at is only clutter, but saying so
+    // beats leaving someone to wonder which copy is live.
+    line('warn', 'A pinned snapshot exists but is not in use', 'hooks run from the source tree');
   }
 
   // 3. Hooks registered.
@@ -180,7 +279,7 @@ function cmdStatus() {
   return cfg.enabled && st.complete ? 0 : 1;
 }
 
-const commands = { install: cmdInstall, uninstall: cmdUninstall, doctor: cmdDoctor, status: cmdStatus };
+const commands = { install: cmdInstall, uninstall: cmdUninstall, pin: cmdPin, doctor: cmdDoctor, status: cmdStatus };
 const cmd = process.argv[2];
 
 if (!cmd || cmd === '--help' || cmd === '-h') {
@@ -188,6 +287,7 @@ if (!cmd || cmd === '--help' || cmd === '-h') {
 
   install     register the recovery hooks with Claude Code
   uninstall   remove them
+  pin         snapshot the recovery code and run hooks from that copy
   doctor      verify every link in the recovery chain
   status      one-line summary`);
   process.exit(0);

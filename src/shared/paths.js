@@ -5,6 +5,13 @@
  * Both the hook (hot path, plain Node) and the Electron app import this, so it
  * stays dependency-free. Tests point LIFELINE_HOME / CLAUDE_CONFIG_DIR at a
  * scratch directory to keep real sessions untouched.
+ *
+ * **Everything stays on this machine.** Lifeline writes only under %APPDATA%,
+ * which is deliberately a local path and not a synced one: config, the attempt
+ * ledger, and the analytics cache all describe one machine's sessions, and
+ * syncing them through OneDrive would both leak transcript-derived data off the
+ * box and let two machines fight over the same ledger. Nothing here is uploaded
+ * anywhere, and the app makes no network requests at all.
  */
 
 const os = require('os');
@@ -28,6 +35,14 @@ const ledgerFile = () => path.join(lifelineHome(), 'ledger.json');
 const eventLogFile = () => path.join(lifelineHome(), 'events.jsonl');
 const hookLogFile = () => path.join(lifelineHome(), 'hook.log');
 
+/**
+ * Cached per-transcript analytics totals.
+ *
+ * Derived data, safe to delete: it only exists so the app does not re-read
+ * hundreds of megabytes of transcripts on every launch.
+ */
+const analyticsCacheFile = () => path.join(lifelineHome(), 'analytics-cache.json');
+
 /** Claude Code's user settings — where the StopFailure hook gets installed. */
 const claudeSettingsFile = () => path.join(claudeHome(), 'settings.json');
 
@@ -36,6 +51,16 @@ const sessionsDir = () => path.join(claudeHome(), 'sessions');
 
 /** Per-project transcript directories (`projects/<slug>/<session-id>.jsonl`). */
 const projectsDir = () => path.join(claudeHome(), 'projects');
+
+/**
+ * Claude Code's own precomputed usage statistics — what `/usage` reads.
+ *
+ * Worth using rather than recomputing: it already holds per-model token totals,
+ * daily activity, and hour-of-day counts across the whole install, computed by
+ * the CLI itself. Read-only, and treated as optional — the file only exists once
+ * `/usage` has run, and its `version` field is checked before trusting the shape.
+ */
+const claudeStatsFile = () => path.join(claudeHome(), 'stats-cache.json');
 
 /**
  * Absolute path to the hook entrypoint, so settings.json can reference it.
@@ -51,8 +76,10 @@ module.exports = {
   ledgerFile,
   eventLogFile,
   hookLogFile,
+  analyticsCacheFile,
   claudeSettingsFile,
   sessionsDir,
   projectsDir,
+  claudeStatsFile,
   hookEntry,
 };

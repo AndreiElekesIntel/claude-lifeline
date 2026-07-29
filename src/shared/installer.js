@@ -16,9 +16,16 @@ const { claudeSettingsFile, claudeHome, hookEntry, lifelineHome } = require('./p
 /** Marker that identifies a Lifeline-owned hook entry. */
 const MARKER = 'claude-lifeline';
 
-/** Events Lifeline registers, with the flags each one needs. */
-function hookSpecs() {
-  const entry = hookEntry();
+/**
+ * Events Lifeline registers, with the flags each one needs.
+ *
+ * `entry` is overridable so recovery can be pointed at a frozen snapshot instead
+ * of the live source tree (see `cli.mjs pin`). Editing the tree that
+ * settings.json points at means a failure arriving mid-save runs a half-written
+ * file — fine for a released install, not while developing.
+ */
+function hookSpecs({ entry: entryOverride } = {}) {
+  const entry = entryOverride || hookEntry();
   const cmd = `node "${entry}"`;
   return [
     {
@@ -97,13 +104,13 @@ function backupSettings() {
 
 const isOurs = (h) => !!h && (h._source === MARKER || (typeof h.command === 'string' && h.command.includes('lifeline-hook')));
 
-function install() {
+function install({ hookEntry: entry } = {}) {
   const backup = backupSettings();
   const settings = readSettings();
   settings.hooks = settings.hooks || {};
 
   const installed = [];
-  for (const spec of hookSpecs()) {
+  for (const spec of hookSpecs({ entry })) {
     const list = Array.isArray(settings.hooks[spec.event]) ? settings.hooks[spec.event] : [];
 
     // Drop any previous Lifeline entry so re-installing upgrades in place
