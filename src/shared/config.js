@@ -40,6 +40,17 @@ const DEFAULTS = {
     deadSessionDetection: true,
     /** Windows toast on every recovery. */
     desktopNotifications: true,
+    /**
+     * Toast when a session finishes working and is waiting for you.
+     *
+     * Separate from `desktopNotifications` rather than folded into it: that one
+     * fires when something went *wrong*, which is rare and always worth an
+     * interruption. This fires on every completed prompt, which for someone
+     * running several sessions is a different volume of noise and a different
+     * decision. Off by default for that reason — the app should not start
+     * interrupting more than it did before an upgrade.
+     */
+    promptCompleteNotifications: false,
     /** Sound on recovery. */
     soundAlerts: false,
     /** Never auto-resume classes a retry cannot fix (auth, billing, ...). */

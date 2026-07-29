@@ -1,8 +1,8 @@
 # Development
 
 ```bash
-npm test             # 279 unit tests
-npm run test:e2e     # 109 Playwright tests against the real Electron app
+npm test             # 300 unit tests
+npm run test:e2e     # 111 Playwright tests against the real Electron app
 npm run lint         # project-specific invariant checks
 npm run screenshots  # regenerate docs/screenshots/
 npm run wiki         # mirror docs/wiki/ to the GitHub wiki
@@ -11,6 +11,8 @@ npm run build        # installer + portable exe into dist/
 ```
 
 Tests redirect `LIFELINE_HOME` and `CLAUDE_CONFIG_DIR` to a throwaway directory and give each one its own Electron `--user-data-dir`, so a test run can never read your real sessions, rewrite your real `settings.json`, or collide with a tray app you have open.
+
+**The registry is the exception, and has to be handled in the code.** `HKCU` is per-user and machine-wide, so nothing an environment variable does can sandbox it. The toast-identity registration therefore checks for itself whether the run is a real one (`LIFELINE_E2E`, or a `LIFELINE_HOME` that is not the real data dir) and refuses to write if it is not — otherwise a test launch overwrites the real installation's notification entry with a path inside a temp directory that no longer exists once the run finishes. If you add anything else that writes outside `LIFELINE_HOME`, it needs the same guard.
 
 ### A known flake in the full e2e run
 
@@ -31,8 +33,10 @@ src/
   shared/idle-shutdown.js the "is everything really finished" veto
   shared/launchpad.js     saved one-click sessions, validated
   shared/widgets.js       widget settings, and where a widget is allowed to appear
+  shared/completion.js    spotting the busy → idle edge that means a prompt finished
   main/                   Electron main, tray, monitor
   main/widget-windows.js  the two desktop widget windows: lifecycle and placement
+  main/toast-identity.js  registers the name Windows shows on a notification
   renderer/               the UI
   renderer/widget.*       one document for both widgets, switched by data-widget
 scripts/

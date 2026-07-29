@@ -240,6 +240,96 @@ test('feature toggles persist and survive a restart', async () => {
   ).toBeChecked();
 });
 
+test('prompt-completion notifications are off until asked for, then persist', async () => {
+  /**
+   * Off by default is the assertion that matters. This one fires on every finished
+   * prompt rather than on a failure, so an upgrade that silently switched it on
+   * would start interrupting far more than the app did before — and the setting
+   * someone reaches for after that is "notifications, off".
+   */
+  const sandbox = fx.makeSandbox('prompt-done');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="settings"]');
+
+  const row = page.locator('.toggle-row').filter({ hasText: 'Tell me when a prompt finishes' });
+  const box = row.locator('input[type=checkbox]');
+  await expect(box).not.toBeChecked();
+
+  await box.click();
+  await expect.poll(() => fx.savedValue(sandbox, 'features.promptCompleteNotifications')).toBe(true);
+
+  await fx.close(ctx);
+  ctx = await fx.launch(sandbox);
+  await ctx.page.click('.nav-item[data-tab="settings"]');
+  await expect(
+    ctx.page.locator('.toggle-row').filter({ hasText: 'Tell me when a prompt finishes' }).locator('input[type=checkbox]')
+  ).toBeChecked();
+});
+
+test('a session going from busy to idle posts one toast, and only when enabled', async () => {
+  /**
+   * The unit suite proves the busy → idle edge is spotted; this proves the wiring
+   * around it — that the monitor's poll reaches the notifier, that the feature flag
+   * is actually consulted, and that a session sitting idle afterwards does not get
+   * re-announced on every subsequent poll.
+   *
+   * Notification.show is stubbed in the main process rather than asserted against
+   * the real Windows toast: there is no API to read back what Action Center was
+   * shown, and a test that waits on a visible toast would depend on Focus Assist.
+   */
+  const sandbox = fx.makeSandbox('prompt-done-fires');
+  // Our own pid, so the liveness probe passes — a finished prompt has to be a
+  // session that is still alive, which is what separates it from a crash.
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'busy' });
+  fx.writeConfig(sandbox, { version: 1, features: { promptCompleteNotifications: false } });
+  ctx = await fx.launch(sandbox);
+  const { app, page } = ctx;
+
+  const collect = () =>
+    app.evaluate(({ Notification }) => {
+      if (!globalThis.__toasts) {
+        globalThis.__toasts = [];
+        const proto = Notification.prototype;
+        const realShow = proto.show;
+        proto.show = function patched() {
+          globalThis.__toasts.push({ title: this.title, body: this.body });
+          // Deliberately not calling through: this suite must not leave toasts in
+          // the user's Action Center.
+          void realShow;
+        };
+      }
+      return globalThis.__toasts;
+    });
+  await collect();
+
+  // With the feature off, finishing must stay silent.
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'idle' });
+  await expect.poll(() => page.locator('#statusPill').getAttribute('data-status'), { timeout: 20_000 }).not.toBe('running');
+  expect(await collect()).toEqual([]);
+
+  // Turn it on, then run a second prompt through the same session.
+  await page.click('.nav-item[data-tab="settings"]');
+  await page.locator('.toggle-row').filter({ hasText: 'Tell me when a prompt finishes' }).locator('input[type=checkbox]').click();
+  await expect.poll(() => fx.savedValue(sandbox, 'features.promptCompleteNotifications')).toBe(true);
+
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'busy' });
+  await expect.poll(() => page.locator('#statusPill').getAttribute('data-status'), { timeout: 20_000 }).toBe('running');
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'idle' });
+
+  await expect.poll(collect, { timeout: 20_000 }).toHaveLength(1);
+  const [toast] = await collect();
+  expect(toast.title).toContain('finished');
+  // The folder leaf identifies which session it was — a toast that says only
+  // "a session finished" is useless with three of them running.
+  expect(toast.body).toContain('payments-api');
+
+  // Idle is a state, finishing is an edge. Several more polls must add nothing:
+  // notifying on the state would re-announce this prompt every five seconds.
+  await page.waitForTimeout(12_000);
+  expect(await collect()).toHaveLength(1);
+});
+
 test('a limit outside its allowed range is rejected and reverted', async () => {
   const sandbox = fx.makeSandbox('limits');
   ctx = await fx.launch(sandbox);

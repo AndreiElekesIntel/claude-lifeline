@@ -15,6 +15,7 @@ A corrupt or missing file **falls back to defaults rather than throwing** — a 
     "stalledSessionDetection": true,
     "deadSessionDetection": true,
     "desktopNotifications": true,
+    "promptCompleteNotifications": false, // toast when a prompt finishes — off, see below
     "soundAlerts": false,
     "respectNonRetryable": true        // keep auth/billing on alert-only
   },
@@ -51,6 +52,21 @@ A corrupt or missing file **falls back to defaults rather than throwing** — a 
 The four `limits` that matter for runaway protection are explained on [Safety](Safety). The `features` toggles map to the checks listed on [What It Recovers From](What-It-Recovers-From).
 
 `analytics.rates` exists because cost here is tokens × published rate, which is not what a subscription bills — override the rates to match whatever you actually pay.
+
+### Notifications
+
+`desktopNotifications` covers the things that went **wrong** — a session was resumed, a failure needs you, a limit was hit. On by default: those are rare and each one is worth an interruption.
+
+`promptCompleteNotifications` is the other kind — a toast when a session stops working and is waiting for you, so you can go and do something else while a long run finishes. It is **off by default and deliberately a separate switch**, because it fires on every completed prompt: across several concurrent sessions that is a different volume of noise, and an upgrade that silently turned it on would make the app interrupt far more than it did before.
+
+It needs no extra hook. A finished prompt is a `busy` → `idle` transition in the session records Claude Code already writes, and the app watches for that edge on its normal poll — so the detection cannot slow down or interfere with a running session. Two consequences worth knowing:
+
+- Sessions already idle when the app starts are **not** announced. On the first poll a session that finished hours ago is indistinguishable from one that finished a second ago, and greeting you with a screenful of stale toasts is worse than saying nothing.
+- A session whose process **vanished** is not reported as finished. That is a crash, it stops being busy too, and `deadSessionDetection` is what has something accurate to say about it.
+
+The toast title comes from a per-user registry entry (`HKCU\Software\Classes\AppUserModelId\com.aelekes.claudelifeline`) that the app writes at startup. Windows reads the app name shown on a toast from there rather than from the executable, so without it every notification is labelled with the raw id instead of "Claude Lifeline".
+
+That entry is the one thing a sandboxed run cannot be isolated from — `LIFELINE_HOME` redirects every file Lifeline writes, but the registry is per-user and machine-wide. So an app launched with `LIFELINE_E2E=1`, or against a `LIFELINE_HOME` that is not the real data directory, **does not register at all**: it would otherwise overwrite the real installation's entry with an icon path inside a scratch directory that is deleted when the run ends.
 
 ### `launchpad.presets`
 

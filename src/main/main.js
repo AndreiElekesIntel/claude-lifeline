@@ -18,6 +18,7 @@ const path = require('path');
 const { Monitor } = require('./monitor');
 const { AnalyticsService } = require('./analytics-service');
 const { drawIcon, iconDataUrl } = require('./tray-icon');
+const { registerToastIdentity, APP_USER_MODEL_ID } = require('./toast-identity');
 const { loadConfig, saveConfig, defaultConfig, deepMerge } = require('../shared/config');
 const { SCHEMA_VERSION } = require('../shared/migrate');
 const { ERROR_CLASSES, POLICIES, effectivePolicy } = require('../shared/policy');
@@ -31,6 +32,7 @@ const launchpad = require('../shared/launchpad');
 const sessionRename = require('../shared/session-rename');
 const history = require('../shared/history');
 const widgets = require('../shared/widgets');
+const completion = require('../shared/completion');
 const widgetWindows = require('./widget-windows');
 
 const isDev = process.argv.includes('--dev');
@@ -71,6 +73,12 @@ let monitor = null;
 let analytics = null;
 let quitting = false;
 let lastNotifiedAt = 0;
+/**
+ * Each session's status as of the previous poll, for spotting the busy → idle edge
+ * that means a prompt finished. Owned here rather than in the monitor because it is
+ * notification state: what the user has already been told about.
+ */
+let lastSessionStatus = new Map();
 
 /** Single instance: a second tray icon would double every notification. */
 if (!app.requestSingleInstanceLock()) {
@@ -419,9 +427,45 @@ function notifyRecovery(state) {
   }).show();
 }
 
+/**
+ * Toast when a session finishes working.
+ *
+ * The transition is detected against the previous poll (see completion.js), so this
+ * fires once per finished prompt rather than continuously while a session sits idle.
+ * The state map is updated even when the feature is off — otherwise switching it on
+ * mid-session would treat every already-idle session as having just finished, and
+ * announce a screenful of stale prompts.
+ */
+function notifyCompletions(state) {
+  const { completed, next } = completion.findCompleted(state.sessions, lastSessionStatus);
+  lastSessionStatus = next;
+
+  const cfg = state.config;
+  if (!cfg.features.promptCompleteNotifications || !Notification.isSupported()) return;
+
+  for (const session of completed) {
+    const label = completion.sessionLabel(session);
+    new Notification({
+      title: 'Claude Lifeline — Session finished',
+      body: `${label} has finished working and is waiting for you.`,
+      silent: !cfg.features.soundAlerts,
+      icon: nativeImage.createFromBuffer(drawIcon(64, 'running')),
+    }).show();
+  }
+}
+
 app.whenReady().then(() => {
   // Hide from the taskbar switcher; the tray is the entry point.
-  if (process.platform === 'win32') app.setAppUserModelId('com.aelekes.claudelifeline');
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+    /**
+     * Setting the id is only half of it: Windows reads the *name* to show on a
+     * toast from the registry, and with nothing registered it prints the raw id.
+     * Not awaited — a toast needs a recovery to happen first, so there is time,
+     * and startup should not block on a cosmetic registry write.
+     */
+    registerToastIdentity();
+  }
 
   monitor = new Monitor({ pollMs: 5_000 }).start();
   analytics = new AnalyticsService({ loadConfig });
@@ -442,6 +486,7 @@ app.whenReady().then(() => {
       if (widgetWindows.isOpen(id)) widgetWindows.send(id, 'widget-state', widgetState(id));
     }
     notifyRecovery(state);
+    notifyCompletions(state);
   });
 
   const cfg = loadConfig();
