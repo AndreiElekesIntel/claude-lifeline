@@ -77,6 +77,16 @@ async function openTab(page, tab) {
   if (tab === 'analytics') {
     await expect(page.locator('#analyticsBodyRows tr').first()).toBeVisible({ timeout: 20_000 });
   }
+  /**
+   * History is filled by the same background transcript scan, so without this the
+   * tab can be measured while it is still half-populated. That produced a real CI
+   * failure — "history: light 246px vs dark 412px" — where the two themes were
+   * simply measured at different points in the load, not laid out differently.
+   * Either the list has rows or the empty state is showing; both are settled states.
+   */
+  if (tab === 'history') {
+    await expect(page.locator('#historyList .day-group, #historyEmpty:not(.hidden)').first()).toBeVisible({ timeout: 20_000 });
+  }
   // Two frames: one for layout, one for any entry transition to finish.
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }

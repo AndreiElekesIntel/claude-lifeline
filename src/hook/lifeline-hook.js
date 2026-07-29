@@ -26,6 +26,7 @@ const { loadConfig, projectAllowed } = require('../shared/config');
 const { effectivePolicy, classify } = require('../shared/policy');
 const ledger = require('../shared/ledger');
 const eventlog = require('../shared/eventlog');
+const completionSignal = require('../shared/completion-signal');
 const { hookLogFile } = require('../shared/paths');
 
 /** Exit 0: observed, nothing injected. */
@@ -254,12 +255,34 @@ async function main() {
  * on a task" are distinguishable without guessing.
  */
 function handleStop(payload, cfg) {
-  if (!cfg.features.backgroundTaskRecovery) return EXIT_NOOP;
-  if (payload.stop_hook_active) return EXIT_NOOP; // already resumed once; don't chain
-
   const tasks = Array.isArray(payload.background_tasks) ? payload.background_tasks : [];
   const crons = Array.isArray(payload.session_crons) ? payload.session_crons : [];
   const pending = tasks.filter((t) => t && (t.status === 'running' || t.status === 'pending'));
+
+  /**
+   * Tell the app the turn is over, so it can toast.
+   *
+   * This is the moment the CLI prints its "Baked for 42s" line, which is why the
+   * notification is driven from here rather than from a status poll in the app —
+   * see completion-signal.js. Only when nothing is still pending: a turn that ended
+   * to wait on a background task has not finished, and is about to be resumed a few
+   * lines below.
+   *
+   * Deliberately before the recovery logic and outside its feature flag, because
+   * this is a different feature and must not depend on that one being on. Wrapped
+   * and ignored: a notification hint is never worth affecting a real session.
+   */
+  if (cfg.features.promptCompleteNotifications && pending.length === 0) {
+    try {
+      completionSignal.write({ sessionId: payload.session_id, cwd: payload.cwd });
+    } catch {
+      /* a missed toast is not a reason to touch this turn */
+    }
+  }
+
+  if (!cfg.features.backgroundTaskRecovery) return EXIT_NOOP;
+  if (payload.stop_hook_active) return EXIT_NOOP; // already resumed once; don't chain
+
   // A scheduled cron will wake the session by itself; nudging would duplicate work.
   if (pending.length === 0 || crons.length > 0) return EXIT_NOOP;
 

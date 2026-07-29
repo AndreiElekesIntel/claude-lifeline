@@ -9,6 +9,8 @@
  */
 
 const { test, expect } = require('@playwright/test');
+const fs = require('fs');
+const path = require('path');
 const fx = require('./fixtures');
 
 let ctx = null;
@@ -267,67 +269,127 @@ test('prompt-completion notifications are off until asked for, then persist', as
   ).toBeChecked();
 });
 
-test('a session going from busy to idle posts one toast, and only when enabled', async () => {
+test('the hook’s completion signal toasts immediately, once, and audibly', async () => {
   /**
-   * The unit suite proves the busy → idle edge is spotted; this proves the wiring
-   * around it — that the monitor's poll reaches the notifier, that the feature flag
-   * is actually consulted, and that a session sitting idle afterwards does not get
-   * re-announced on every subsequent poll.
+   * The unit suite covers the signal file and the freshness rules; this proves the
+   * wiring — that the app is really watching, that the feature flag is consulted,
+   * that one write cannot become several toasts, and that the toast is not silent.
    *
-   * Notification.show is stubbed in the main process rather than asserted against
-   * the real Windows toast: there is no API to read back what Action Center was
-   * shown, and a test that waits on a visible toast would depend on Focus Assist.
+   * The timing assertion is the point of the rewrite. Detection used to ride the
+   * five-second poll, so the toast could arrive after the user had already looked
+   * back at the terminal. It is now driven by fs.watch, so a generous-but-real
+   * ceiling of two seconds would fail on the old implementation.
+   *
+   * Notification.show is stubbed in the main process rather than asserted against a
+   * real Windows toast: there is no API to read back what Action Center displayed,
+   * and waiting on a visible toast would make the test depend on Focus Assist.
    */
   const sandbox = fx.makeSandbox('prompt-done-fires');
-  // Our own pid, so the liveness probe passes — a finished prompt has to be a
-  // session that is still alive, which is what separates it from a crash.
-  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'busy' });
   fx.writeConfig(sandbox, { version: 1, features: { promptCompleteNotifications: false } });
   ctx = await fx.launch(sandbox);
   const { app, page } = ctx;
 
-  const collect = () =>
-    app.evaluate(({ Notification }) => {
-      if (!globalThis.__toasts) {
-        globalThis.__toasts = [];
-        const proto = Notification.prototype;
-        const realShow = proto.show;
-        proto.show = function patched() {
-          globalThis.__toasts.push({ title: this.title, body: this.body });
-          // Deliberately not calling through: this suite must not leave toasts in
-          // the user's Action Center.
-          void realShow;
-        };
-      }
-      return globalThis.__toasts;
-    });
-  await collect();
+  /**
+   * Installed once, then read separately. Doing both in one repeatedly-polled
+   * evaluate makes Playwright drop the result ("Resulting promise was garbage
+   * collected"), so the spy and the readback are deliberately two calls.
+   */
+  await app.evaluate(({ Notification }) => {
+    globalThis.__toasts = [];
+    // Deliberately does not call through: this suite must not leave toasts in the
+    // user's Action Center.
+    Notification.prototype.show = function patched() {
+      globalThis.__toasts.push({ title: this.title, body: this.body, silent: this.silent, at: Date.now() });
+    };
+  });
+  /**
+   * Read after a fixed settle, never in a poll.
+   *
+   * An `app.evaluate` issued into the window where the main process is posting a
+   * notification gets abandoned by Playwright — "Resulting promise was garbage
+   * collected" — so retry-until-nonempty fails for a reason that has nothing to do
+   * with Lifeline. Waiting first and reading once is both reliable and a stronger
+   * assertion: the toast has to have arrived within the settle, not merely by the
+   * end of a ten-second poll.
+   */
+  const settle = () => page.waitForTimeout(1_500);
+  const collect = async () => JSON.parse(await app.evaluate(() => JSON.stringify(globalThis.__toasts)));
 
-  // With the feature off, finishing must stay silent.
-  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'idle' });
-  await expect.poll(() => page.locator('#statusPill').getAttribute('data-status'), { timeout: 20_000 }).not.toBe('running');
+  // Exactly what the Stop hook writes, so this exercises the real contract.
+  const signal = (rec) =>
+    fs.writeFileSync(path.join(sandbox.lifelineHome, 'last-completion.json'), JSON.stringify(rec), 'utf8');
+
+  // With the feature off, a completion must stay silent.
+  signal({ sessionId: 'done-1', cwd: 'C:/work/payments-api', name: null, at: Date.now() });
+  await settle();
   expect(await collect()).toEqual([]);
 
-  // Turn it on, then run a second prompt through the same session.
   await page.click('.nav-item[data-tab="settings"]');
   await page.locator('.toggle-row').filter({ hasText: 'Tell me when a prompt finishes' }).locator('input[type=checkbox]').click();
   await expect.poll(() => fx.savedValue(sandbox, 'features.promptCompleteNotifications')).toBe(true);
 
-  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'busy' });
-  await expect.poll(() => page.locator('#statusPill').getAttribute('data-status'), { timeout: 20_000 }).toBe('running');
-  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'done-1', cwd: 'C:/work/payments-api', status: 'idle' });
+  const wroteAt = Date.now();
+  signal({ sessionId: 'done-1', cwd: 'C:/work/payments-api', name: null, at: wroteAt });
+  await settle();
 
-  await expect.poll(collect, { timeout: 20_000 }).toHaveLength(1);
   const [toast] = await collect();
+  expect(toast).toBeTruthy();
   expect(toast.title).toContain('finished');
   // The folder leaf identifies which session it was — a toast that says only
   // "a session finished" is useless with three of them running.
   expect(toast.body).toContain('payments-api');
+  // Audible: a completion is the one notification actively being waited for.
+  expect(toast.silent).toBe(false);
+  /**
+   * Immediate. This is the assertion the rewrite exists for: detection used to ride
+   * the five-second poll, so this ceiling fails on the old implementation. Observed
+   * at single-digit milliseconds — a second is slack for a loaded CI box.
+   */
+  expect(toast.at - wroteAt).toBeLessThan(1_000);
 
-  // Idle is a state, finishing is an edge. Several more polls must add nothing:
-  // notifying on the state would re-announce this prompt every five seconds.
-  await page.waitForTimeout(12_000);
+  /**
+   * One write, one toast. fs.watch fires several times for a single write on
+   * Windows, so without the timestamp dedupe this is where two or three appear.
+   */
+  await page.waitForTimeout(2_500);
   expect(await collect()).toHaveLength(1);
+
+  // A second, genuinely new completion is announced again.
+  signal({ sessionId: 'done-1', cwd: 'C:/work/payments-api', name: null, at: Date.now() });
+  await settle();
+  expect(await collect()).toHaveLength(2);
+});
+
+test('a stale completion signal is not announced when the app starts', async () => {
+  /**
+   * The signal file outlives the app, and the watcher can fire on startup. Opening
+   * the tray must not announce a prompt that finished hours ago — the same reasoning
+   * that stops an already-idle session being reported as newly finished.
+   */
+  const sandbox = fx.makeSandbox('prompt-done-stale');
+  fx.writeConfig(sandbox, { version: 1, features: { promptCompleteNotifications: true } });
+  fs.writeFileSync(
+    path.join(sandbox.lifelineHome, 'last-completion.json'),
+    JSON.stringify({ sessionId: 'old-1', cwd: 'C:/work/payments-api', name: null, at: Date.now() - 3_600_000 }),
+    'utf8'
+  );
+
+  ctx = await fx.launch(sandbox);
+  const { app, page } = ctx;
+  const toasts = await app.evaluate(({ Notification }) => {
+    globalThis.__toasts = [];
+    Notification.prototype.show = function patched() {
+      globalThis.__toasts.push({ title: this.title });
+    };
+    return globalThis.__toasts;
+  });
+  expect(toasts).toEqual([]);
+
+  // Touching the file must not resurrect the old record either: it is stale by
+  // timestamp, not merely already-seen.
+  fs.appendFileSync(path.join(sandbox.lifelineHome, 'last-completion.json'), '', 'utf8');
+  await page.waitForTimeout(1_500);
+  expect(await app.evaluate(() => globalThis.__toasts)).toEqual([]);
 });
 
 test('a limit outside its allowed range is rejected and reverted', async () => {
@@ -360,7 +422,7 @@ test('a partial save does not blank out unrelated settings', async () => {
   await page.click('.nav-item[data-tab="settings"]');
 
   // Change two unrelated things; both must end up in the file together.
-  await page.locator('.toggle-row').filter({ hasText: 'Sound with notifications' }).locator('input').click();
+  await page.locator('.toggle-row').filter({ hasText: 'Sound on failure notifications' }).locator('input').click();
   await expect.poll(() => fx.savedValue(sandbox, 'features.soundAlerts')).toBe(true);
 
   await page.selectOption('#accentSelect', 'emerald');

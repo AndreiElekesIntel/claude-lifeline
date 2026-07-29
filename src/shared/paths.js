@@ -43,6 +43,14 @@ const hookLogFile = () => path.join(lifelineHome(), 'hook.log');
  */
 const analyticsCacheFile = () => path.join(lifelineHome(), 'analytics-cache.json');
 
+/**
+ * Where the hook tells the app a turn just finished.
+ *
+ * One line of JSON, overwritten every turn — see completion-signal.js for why the
+ * notification is driven by this rather than by the app's own poll.
+ */
+const completionSignalFile = () => path.join(lifelineHome(), 'last-completion.json');
+
 /** Claude Code's user settings — where the StopFailure hook gets installed. */
 const claudeSettingsFile = () => path.join(claudeHome(), 'settings.json');
 
@@ -77,6 +85,7 @@ module.exports = {
   eventLogFile,
   hookLogFile,
   analyticsCacheFile,
+  completionSignalFile,
   claudeSettingsFile,
   sessionsDir,
   projectsDir,

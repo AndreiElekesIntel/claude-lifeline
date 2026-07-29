@@ -1,67 +1,38 @@
 'use strict';
 /**
- * Noticing when a session has finished working.
+ * How a finished session is described in a notification.
  *
- * "Your prompt is done" is a busy → idle transition in Claude Code's own session
- * records, which `sessions.listSessions()` already reads on every poll. So this
- * needs no new hook: the signal is on disk, and deriving it in the app rather than
- * on Claude Code's critical path means a bug here can never delay a real session.
+ * ## Why the detection is not in here any more
  *
- * ## Why it is a diff and not a status check
+ * The first version of this feature derived "a prompt finished" from a busy → idle
+ * change in Claude Code's session records, compared across the app's five-second
+ * poll. It worked, but it was the wrong signal on two counts, and both were
+ * user-visible:
  *
- * A session sitting idle is idle on every poll. Notifying on `status === 'idle'`
- * would re-announce the same finished prompt every five seconds for as long as the
- * window stayed open. What matters is the *edge* — the poll where a session that
- * was busy stopped being busy — so this compares against the previous poll and
- * reports only what changed.
+ *   - It was **up to five seconds late**, which on a short prompt means the toast
+ *     arrives after you have already looked back at the terminal.
+ *   - A session stops being `busy` for reasons that are not "your work is done" — a
+ *     turn ending to wait on a background task, for one. The status field cannot
+ *     tell those apart, so some toasts were announcing a pause as a completion.
  *
- * That makes the first poll a special case. At startup every session is seen for
- * the first time, and an idle one is indistinguishable from one that just
- * finished; announcing them would mean a fistful of toasts for prompts that
- * completed while the app was closed, possibly hours ago. So the first observation
- * of a session only records its state.
+ * Claude Code's `Stop` hook fires exactly when a turn ends cleanly — the same moment
+ * the CLI prints its `✻ Baked for 42s` line — and it is handed the background-task
+ * list, so it *can* tell them apart. Detection therefore moved to the hook, which
+ * signals the app through a file it watches. See completion-signal.js.
  *
- * ## Why a completed prompt is not the same as a dead one
- *
- * A session whose process has exited also stops being busy, and that is a
- * different event with its own detection (`findDead`). Only a session that is
- * still alive can have *finished* — a vanished one crashed, and calling that
- * "finished" would report a failure as a success.
+ * The edge-detection code that used to live here was deleted rather than kept: it had
+ * no callers left, and a second, unused implementation of "did a prompt finish" is
+ * exactly the kind of thing a later reader wires back up by mistake.
  */
-
-/**
- * Sessions that stopped working since the last poll.
- *
- * `previous` is a Map of sessionId → status, as returned in `next`; pass the value
- * from the last call and store the one that comes back. Pure: the caller owns the
- * state, so a test can drive any sequence of polls it likes.
- *
- * Keyed by `sessionId` rather than `pid`, because a pid is recycled by the OS and
- * a resumed session keeps its id — the id is what "the same conversation" means.
- */
-function findCompleted(sessions, previous) {
-  const before = previous instanceof Map ? previous : new Map();
-  const next = new Map();
-  const completed = [];
-
-  for (const session of sessions || []) {
-    if (!session || !session.sessionId) continue;
-    const was = before.get(session.sessionId);
-    next.set(session.sessionId, session.status);
-
-    // Alive, was working, is no longer working. `was === undefined` is a session
-    // seen for the first time — recorded above, never announced.
-    if (was === 'busy' && session.status !== 'busy' && session.alive) completed.push(session);
-  }
-
-  return { completed, next };
-}
 
 /**
  * What to call a finished session in a notification.
  *
  * The name if it has one, else the last segment of its working directory, because
- * "payments-api" is what someone recognises and the full path does not fit a toast.
+ * "payments-api" is what someone recognises and a full path does not fit a toast.
+ *
+ * Takes anything carrying `name` and `cwd`, which covers both a live session record
+ * and the much smaller signal the hook writes.
  */
 function sessionLabel(session) {
   if (!session) return 'A session';
@@ -74,11 +45,11 @@ function sessionLabel(session) {
 /**
  * There is deliberately no "worked for 4m" in the toast.
  *
- * It would be the obvious thing to add and there is no honest source for it:
- * `updatedAt` is written when the status *changes*, so on a session that has just
- * gone idle it dates the end of the work, not the start (see the sessions.js
- * header). Nothing on disk records when the prompt began, so any duration here
- * would be a guess formatted to look like a measurement.
+ * The `Stop` payload does not carry when the turn began, and nothing on disk records
+ * it either: `updatedAt` is written when a status *changes*, so on a session that has
+ * just gone idle it dates the end of the work rather than the start (see the
+ * sessions.js header). Any duration here would be a guess formatted to look like a
+ * measurement, so the toast says what it knows and stops there.
  */
 
-module.exports = { findCompleted, sessionLabel };
+module.exports = { sessionLabel };

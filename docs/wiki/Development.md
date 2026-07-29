@@ -1,8 +1,8 @@
 # Development
 
 ```bash
-npm test             # 300 unit tests
-npm run test:e2e     # 111 Playwright tests against the real Electron app
+npm test             # 304 unit tests
+npm run test:e2e     # 112 Playwright tests against the real Electron app
 npm run lint         # project-specific invariant checks
 npm run screenshots  # regenerate docs/screenshots/
 npm run wiki         # mirror docs/wiki/ to the GitHub wiki
@@ -33,7 +33,8 @@ src/
   shared/idle-shutdown.js the "is everything really finished" veto
   shared/launchpad.js     saved one-click sessions, validated
   shared/widgets.js       widget settings, and where a widget is allowed to appear
-  shared/completion.js    spotting the busy → idle edge that means a prompt finished
+  shared/completion.js    how a finished session is labelled in the toast
+  shared/completion-signal.js  the Stop-hook → app handoff behind completion toasts
   main/                   Electron main, tray, monitor
   main/widget-windows.js  the two desktop widget windows: lifecycle and placement
   main/toast-identity.js  registers the name Windows shows on a notification
