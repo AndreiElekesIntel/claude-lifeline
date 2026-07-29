@@ -199,6 +199,127 @@ test('hourly is 24 slots, so the chart keeps its shape', () => {
   assert.equal(hours.reduce((n, h) => n + h.sessions, 0), 46);
 });
 
+/* -------------------------------- windows ------------------------------- */
+
+/**
+ * The fixture's dated rows sit on 2026-07-25 and 26, so every window test pins
+ * `now` to the 27th. Real `Date.now()` would put them outside a 7-day window
+ * within a fortnight of this being written.
+ */
+const NOW = Date.parse('2026-07-27T12:00:00.000Z');
+
+test('a window sums the dated rows rather than reusing the install-wide totals', () => {
+  write(fixture());
+  const w = stats.report({ now: NOW }).windows.week;
+  // 3 + 8 sessions and 100 + 400 messages, from dailyActivity — not the 267 and
+  // 107842 the cache reports for the whole install.
+  assert.equal(w.totalSessions, 11);
+  assert.equal(w.totalMessages, 500);
+  assert.equal(w.totalToolCalls, 150);
+  assert.equal(w.totalTokens, 17_000);
+  assert.equal(w.daysWithData, 2);
+  assert.equal(w.days, 7);
+});
+
+test('all time returns the unwindowed figures, and is not marked apportioned', () => {
+  write(fixture());
+  const r = stats.report({ now: NOW });
+  const all = r.windows.all;
+  assert.equal(all.days, null);
+  assert.equal(all.from, null);
+  assert.equal(all.apportioned, false, 'nothing is estimated when nothing is sliced');
+  // The per-model figures are the measured ones, straight from modelUsage.
+  assert.equal(all.costUsd, r.costUsd);
+  assert.equal(all.models.length, 2);
+  assert.deepEqual(all.models[0].tokens, r.models[0].tokens);
+  assert.equal(all.models[0].apportioned, false);
+});
+
+test('all time uses the install-wide counters, not the prunable daily rows', () => {
+  write(fixture());
+  const r = stats.report({ now: NOW });
+  const all = r.windows.all;
+  // The fixture keeps only two dated rows but remembers 267 sessions and 107,842
+  // messages for the whole install. Summing the rows would report 11 and 500 —
+  // and would silently disagree with what `/usage` prints.
+  assert.equal(all.totalSessions, 267);
+  assert.equal(all.totalMessages, 107_842);
+  assert.equal(all.totalSessions, r.totalSessions, 'and with the rest of the report');
+  assert.equal(all.totalMessages, r.totalMessages);
+  assert.equal(all.totalTokens, r.totalTokens);
+});
+
+test('a window keeps only the models that actually appear in it', () => {
+  write(fixture());
+  const w = stats.report({ now: NOW }).windows.week;
+  // Haiku has 900M all-time cache-read tokens but only 2,000 in the dated rows,
+  // so it belongs in the window at that size — while a model absent from those
+  // rows must not be carried in at its all-time size at all.
+  assert.deepEqual(w.models.map((m) => m.model).sort(), ['claude-haiku-4-5-20251001', 'claude-opus-4-8']);
+  const haiku = w.models.find((m) => m.model === 'claude-haiku-4-5-20251001');
+  assert.equal(haiku.total, 2_000);
+  assert.ok(haiku.total < 900_000_000);
+});
+
+test('a model with no tokens in the window is dropped, not zero-filled', () => {
+  write(fixture({ dailyModelTokens: [{ date: '2026-07-26', tokensByModel: { 'claude-opus-4-8': 10_000 } }] }));
+  const w = stats.report({ now: NOW }).windows.week;
+  assert.deepEqual(w.models.map((m) => m.model), ['claude-opus-4-8']);
+});
+
+test('windowed cost is apportioned by token share, and says that it is', () => {
+  write(fixture());
+  const r = stats.report({ now: NOW });
+  const w = r.windows.week;
+  assert.equal(w.apportioned, true, 'the UI prints a caveat off this flag');
+  const opusAll = r.models.find((m) => m.model === 'claude-opus-4-8');
+  const opusWk = w.models.find((m) => m.model === 'claude-opus-4-8');
+  assert.equal(opusWk.apportioned, true);
+  // 15,000 of the model's 506,000,000 tokens fall in the window, so its cost is
+  // scaled by exactly that share. This is an assumption about a steady token mix,
+  // which is why the flag above exists.
+  const share = 15_000 / opusAll.total;
+  assert.ok(Math.abs(opusWk.costUsd - opusAll.costUsd * share) < 1e-9);
+  // The split is scaled by the same factor, so input/output still add to `total`.
+  const sum = opusWk.tokens.input + opusWk.tokens.output + opusWk.tokens.cacheWrite + opusWk.tokens.cacheRead;
+  assert.ok(Math.abs(sum - opusWk.total) <= 4, 'within rounding of the four buckets');
+});
+
+test('the cutoff is inclusive of today, matching the transcript analytics window', () => {
+  write(fixture());
+  // `days: 2` from the 27th reaches back to the 26th, so the 25th is excluded.
+  const raw = stats.readRaw();
+  const models = stats.modelBreakdown(raw, null);
+  const daily = stats.dailyBreakdown(raw);
+  const w = stats.windowStats(raw, models, daily, 2, NOW);
+  assert.equal(w.from, '2026-07-26');
+  assert.deepEqual(w.daily.map((d) => d.date), ['2026-07-26']);
+  assert.equal(w.totalSessions, 8, 'the 25th\'s 3 sessions are outside it');
+});
+
+test('every range the picker offers is present, and each is no smaller than the last', () => {
+  write(fixture());
+  const wins = stats.report({ now: NOW }).windows;
+  assert.deepEqual(Object.keys(wins), ['week', 'month', 'quarter', 'half', 'year', 'all']);
+  const order = ['week', 'month', 'quarter', 'half', 'year'];
+  for (let i = 1; i < order.length; i++) {
+    assert.ok(
+      wins[order[i]].totalSessions >= wins[order[i - 1]].totalSessions,
+      `${order[i]} cannot contain fewer sessions than ${order[i - 1]}`
+    );
+  }
+});
+
+test('a window over an empty cache is zeroed rather than absent', () => {
+  write({ version: 4 });
+  const w = stats.report({ now: NOW }).windows.month;
+  assert.deepEqual(w.models, []);
+  assert.equal(w.totalSessions, 0);
+  assert.equal(w.totalTokens, 0);
+  assert.equal(w.costUsd, 0);
+  assert.equal(w.daysWithData, 0);
+});
+
 /* ------------------------------- records -------------------------------- */
 
 test('the longest session is normalised into the shape the UI expects', () => {

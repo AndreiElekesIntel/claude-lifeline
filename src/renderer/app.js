@@ -88,6 +88,63 @@ function humanCount(n) {
   return String(v);
 }
 
+/* ------------------------- loading placeholders ------------------------ */
+
+/**
+ * Show a metric as "still being counted" rather than as an em-dash.
+ *
+ * A cold analytics scan takes a couple of seconds, and during it every figure
+ * used to read "—", which is also what the app shows when a value is genuinely
+ * zero or unavailable. So a busy tab was indistinguishable from an empty one.
+ * Rolling digits are unambiguous: something is being worked out.
+ *
+ * The digits are deliberately random per frame — this is a progress indicator,
+ * not a count-up to a value that is not known yet. Pretending to converge on a
+ * number would be inventing one.
+ */
+const rollingTimers = new WeakMap();
+
+function startRolling(node, { width = 3, prefix = '' } = {}) {
+  if (!node) return;
+  if (rollingTimers.has(node)) return; // already rolling; do not stack timers
+  node.classList.add('metric-rolling');
+  // The dimming says "provisional" to someone looking at it. These say the same
+  // to a screen reader, which would otherwise read the random digits out as the
+  // figure — the one audience for whom the animation carries no meaning at all.
+  node.setAttribute('aria-busy', 'true');
+  node.setAttribute('aria-label', 'Loading');
+
+  const tick = () => {
+    let out = '';
+    for (let i = 0; i < width; i++) out += String(Math.floor(Math.random() * 10));
+    node.textContent = `${prefix}${out}`;
+  };
+  tick();
+  // ~11fps. Fast enough to read as motion, slow enough not to look like noise.
+  rollingTimers.set(node, setInterval(tick, 90));
+}
+
+/** Stop the roll and put the real value in. Safe to call when not rolling. */
+function stopRolling(node, text) {
+  if (!node) return;
+  const timer = rollingTimers.get(node);
+  if (timer !== undefined) {
+    clearInterval(timer);
+    rollingTimers.delete(node);
+  }
+  node.classList.remove('metric-rolling');
+  // Both must go, or the placeholder's "Loading" label keeps overriding the real
+  // value for anyone reading this with assistive tech.
+  node.removeAttribute('aria-busy');
+  node.removeAttribute('aria-label');
+  if (text !== undefined) node.textContent = text;
+}
+
+/** Roll every metric in a group, by element id. */
+function rollAll(ids, opts) {
+  for (const id of ids) startRolling($(`#${id}`), opts);
+}
+
 function currencySymbol() {
   const a = state && state.config && state.config.analytics;
   return (a && a.currencySymbol) || '$';
@@ -144,9 +201,13 @@ function goTo(tab) {
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $$('.tab').forEach((s) => s.classList.toggle('active', s.dataset.tab === tab));
   $('#content').scrollTop = 0;
-  // Analytics can take seconds on a cold cache, so it is only scanned when the
-  // tab is actually opened rather than on every poll.
-  if (tab === 'analytics') loadAnalytics();
+  // Analytics can take seconds on a cold cache, so it is only scanned when a tab
+  // that needs it is actually opened rather than on every poll. Sessions is in
+  // that set because of its cost column, which reads the same scan.
+  if (tab === 'analytics' || tab === 'sessions') loadAnalytics();
+  // The picker was built while this tab was hidden, where every offset measures
+  // zero — so the glider has to be placed the first time it is actually visible.
+  if (tab === 'analytics') syncRangePicker();
 }
 
 $$('.nav-item').forEach((btn) => btn.addEventListener('click', () => goTo(btn.dataset.tab)));
@@ -181,10 +242,15 @@ function renderStatus() {
     $('#aboutIcon').src = state.iconUrl;
   }
 
+  // Coloured by what the button does, not by what the current state is: amber
+  // while protection runs (the click pauses it), green while it is paused (the
+  // click starts it again).
   const btn = $('#btnToggleProtection');
-  btn.textContent = state.config.enabled ? 'Pause protection' : 'Resume protection';
-  btn.classList.toggle('primary', !state.config.enabled);
-  btn.classList.toggle('ghost', state.config.enabled);
+  const on = state.config.enabled;
+  btn.textContent = on ? 'Pause protection' : 'Resume protection';
+  btn.classList.toggle('hold', on);
+  btn.classList.toggle('go', !on);
+  btn.classList.remove('primary', 'ghost');
 }
 
 function renderDashboard() {
@@ -493,15 +559,99 @@ function renderSessions() {
     stateCell.appendChild(el('span', `chip ${tone}`, text));
     tr.appendChild(stateCell);
 
+    tr.appendChild(sessionCostCell(s));
     tr.appendChild(el('td', 'mono', relTime(s.updatedAt)));
     tr.appendChild(el('td', 'mono', s.pid));
     body.appendChild(tr);
   }
 }
 
+/**
+ * What this session has cost so far.
+ *
+ * The figure comes from the analytics scan, which is the only thing that reads
+ * transcripts — so it is joined here by session id rather than recomputed. Three
+ * states worth distinguishing, because a bare "—" for all of them reads as a
+ * bug: analytics turned off, not scanned yet, and scanned-but-no-transcript
+ * (which is normal for a session that has not sent a message).
+ */
+function sessionCostCell(s) {
+  const cell = el('td', 'mono');
+
+  if (state.config.analytics && state.config.analytics.enabled === false) {
+    cell.textContent = 'off';
+    cell.classList.add('cost-muted');
+    cell.title = 'Analytics is turned off, so cost is not tracked.';
+    return cell;
+  }
+
+  if (!analytics) {
+    // Deliberately a placeholder rather than a zero: zero is a claim, and this
+    // is an absence of data. Opening the tab kicks the scan off.
+    cell.appendChild(el('span', 'skel skel-cost'));
+    cell.title = 'Reading transcripts…';
+    // The bar is empty of text, so without this the cell reads as blank rather
+    // than as pending.
+    cell.setAttribute('aria-busy', 'true');
+    cell.setAttribute('aria-label', 'Reading transcripts');
+    return cell;
+  }
+
+  const rec = costBySession().get(String(s.sessionId || ''));
+  if (!rec) {
+    cell.textContent = '—';
+    cell.classList.add('cost-muted');
+    cell.title = 'No transcript activity recorded for this session yet.';
+    return cell;
+  }
+
+  cell.textContent = money(rec.costUsd);
+  // Tokens in the tooltip: the cost is derived from them, so this is the
+  // evidence for the number rather than extra trivia.
+  const tk = rec.tokens || {};
+  const total = (tk.input || 0) + (tk.output || 0) + (tk.cacheWrite || 0) + (tk.cacheRead || 0);
+  cell.title = `${humanCount(total)} tokens · ${humanCount(tk.output || 0)} out${rec.model ? ` · ${rec.model}` : ''}`;
+  if (rec.costUsd === 0) cell.classList.add('cost-muted');
+  return cell;
+}
+
+/**
+ * Session id → its analytics record, rebuilt only when the report changes.
+ *
+ * renderSessions runs on the 5s poll, and rebuilding a 50-entry map each time
+ * for every row would be quadratic for no reason.
+ */
+let costIndex = { from: null, map: new Map() };
+function costBySession() {
+  if (costIndex.from === analytics) return costIndex.map;
+  const map = new Map();
+  for (const r of (analytics && analytics.recent) || []) {
+    if (r.sessionId) map.set(String(r.sessionId), r);
+  }
+  costIndex = { from: analytics, map };
+  return map;
+}
+
 /* =============================== analytics ============================= */
 
-const RANGE_LABEL = { week: 'past 7 days', month: 'past 30 days', year: 'past 12 months', all: 'all time' };
+const RANGE_LABEL = {
+  week: 'past 7 days',
+  month: 'past 30 days',
+  quarter: 'past 3 months',
+  half: 'past 6 months',
+  year: 'past 12 months',
+  all: 'all time',
+};
+
+/** The selector's own labels — short, because they sit in a row of six. */
+const RANGES = [
+  ['week', '1W', 'Past 7 days'],
+  ['month', '1M', 'Past 30 days'],
+  ['quarter', '3M', 'Past 3 months'],
+  ['half', '6M', 'Past 6 months'],
+  ['year', '12M', 'Past 12 months'],
+  ['all', 'All', 'All time'],
+];
 
 /** Fetch a report, showing progress rather than an empty page during a cold scan. */
 async function loadAnalytics({ force = false } = {}) {
@@ -514,6 +664,9 @@ async function loadAnalytics({ force = false } = {}) {
     // leaving one visible and empty.
     $('#analyticsBody').classList.add('hidden');
     $('#usageBody').classList.add('hidden');
+    // Sessions still needs telling, so its cost column says "off" rather than
+    // sitting on a loading placeholder that will never resolve.
+    renderSessions();
     return;
   }
   applyAnalyticsView();
@@ -522,69 +675,239 @@ async function loadAnalytics({ force = false } = {}) {
   const btn = $('#btnRefreshAnalytics');
   btn.disabled = true;
   // A cold scan reads hundreds of megabytes; without this the tab looks broken
-  // for a couple of seconds on first open.
-  if (!analytics) $('#chartTag').textContent = 'reading transcripts…';
+  // for a couple of seconds on first open. Only on a cold scan — a refresh
+  // already has figures on screen, and blanking them to roll digits would be a
+  // step backwards.
+  if (!analytics) {
+    $('#chartTag').textContent = 'reading transcripts…';
+    rollAll(['anHours', 'anSessions', 'anTokens']);
+    startRolling($('#anCost'), { prefix: `${currencySymbol()}0.`, width: 2 });
+    rollAll(['dashWeekHours', 'dashWeekSessions']);
+    startRolling($('#dashWeekCost'), { prefix: `${currencySymbol()}0.`, width: 2 });
+  }
   try {
     const res = await api.analyticsReport({ force });
     if (res && res.error) toast(`Analytics: ${res.error}`, 'warn');
     if (res && res.report) analytics = res.report;
     renderAnalytics();
     renderDashWeek();
+    // The sessions table prices each row from this same report, so it needs a
+    // redraw too — otherwise its cost column keeps its loading placeholder
+    // until the next 5s poll happens to come round.
+    renderSessions();
   } catch (err) {
     toast(`Analytics failed: ${err.message}`, 'danger');
   } finally {
     analyticsLoading = false;
     btn.disabled = false;
+    // Whatever happened, nothing may still be rolling. On the failure path
+    // renderAnalytics() returned early (no report), so without this the digits
+    // would spin forever on a tab that has given up.
+    const stillRolling = ['anHours', 'anSessions', 'anTokens', 'anCost', 'dashWeekHours', 'dashWeekSessions', 'dashWeekCost'];
+    for (const id of stillRolling) {
+      const node = $(`#${id}`);
+      if (node && node.classList.contains('metric-rolling')) stopRolling(node, '—');
+    }
+    if ($('#chartTag').textContent === 'reading transcripts…') $('#chartTag').textContent = '';
   }
 }
 
 $('#btnRefreshAnalytics').addEventListener('click', () => loadAnalytics({ force: true }));
-$('#analyticsRange').addEventListener('change', (e) => {
-  analyticsRange = e.target.value;
+
+/**
+ * Build the range picker, once.
+ *
+ * Built here rather than written out in the HTML so RANGES stays the single
+ * definition of what ranges exist — adding one should not mean editing markup,
+ * a label map, and a bucket list in three files.
+ */
+function renderRangePicker() {
+  const host = $('#analyticsRange');
+  const glider = $('#rangeGlider');
+  // Keep the glider; replace only the buttons.
+  for (const old of $$('#analyticsRange .range-btn')) old.remove();
+
+  for (const [key, short, full] of RANGES) {
+    const btn = el('button', 'range-btn', short);
+    btn.dataset.range = key;
+    btn.type = 'button';
+    btn.setAttribute('role', 'tab');
+    // The short label is the only visible text, so the full one has to reach
+    // assistive tech some other way.
+    btn.title = full;
+    btn.setAttribute('aria-label', full);
+    btn.addEventListener('click', () => selectRange(key));
+    host.appendChild(btn);
+  }
+  host.appendChild(glider);
+  // syncRangePicker suppresses the transition itself on a first placement, so
+  // there is nothing to coordinate here. This normally measures zero anyway —
+  // the Analytics tab is hidden at boot — and goTo() re-syncs when it opens.
+  syncRangePicker();
+}
+
+/** Switch range, repaint whichever view is showing, and keep the glider with it. */
+function selectRange(key) {
+  if (analyticsRange === key) return;
+  analyticsRange = key;
+  syncRangePicker();
   renderAnalytics();
+  if (analyticsView === 'usage') renderUsage();
+}
+
+/**
+ * Arrow-key navigation, because this is a `role="tablist"`.
+ *
+ * That role is a promise: a screen reader announces the group as tabs and its
+ * user then expects arrows to move between them. Leaving it to Tab alone means
+ * the markup describes an interaction the app does not actually support — worse
+ * than not claiming the role at all. Home/End included for the same reason.
+ *
+ * Delegated to the host so it keeps working if the buttons are ever rebuilt.
+ */
+$('#analyticsRange').addEventListener('keydown', (e) => {
+  const STEP = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+  const keys = RANGES.map(([k]) => k);
+  const at = keys.indexOf(analyticsRange);
+  let next = null;
+
+  if (e.key in STEP) {
+    // Clamped rather than wrapped: these are an ordered scale from a week to all
+    // time, so running off the end and reappearing at the other loses your place.
+    next = keys[Math.min(keys.length - 1, Math.max(0, at + STEP[e.key]))];
+  } else if (e.key === 'Home') {
+    next = keys[0];
+  } else if (e.key === 'End') {
+    next = keys[keys.length - 1];
+  } else {
+    return;
+  }
+
+  e.preventDefault(); // arrows would otherwise scroll the tab behind the picker
+  selectRange(next);
+  // Focus follows selection, which is what makes the next arrow press continue
+  // from here rather than from wherever the ring was left.
+  const btn = $(`#analyticsRange .range-btn[data-range="${next}"]`);
+  if (btn) btn.focus();
 });
 
+/** Move the glider and the active class onto the selected range. */
+function syncRangePicker() {
+  const host = $('#analyticsRange');
+  const glider = $('#rangeGlider');
+  let active = null;
+  for (const btn of $$('#analyticsRange .range-btn')) {
+    const on = btn.dataset.range === analyticsRange;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (on) active = btn;
+  }
+  if (!active) return;
+  // Measured off rects rather than offsetLeft, because the reference edge matters
+  // and offsetLeft's is ambiguous: the glider's `left: 0` resolves to the host's
+  // *padding* box, so the border has to be added back explicitly. Doing this with
+  // offsetLeft minus clientLeft double-counted the 1px border and left the glider
+  // sitting a pixel to the left of its button. Rects are also sub-pixel, which
+  // offsetWidth is not — the buttons are 42.09px wide at this font size.
+  const hostBox = host.getBoundingClientRect();
+  const activeBox = active.getBoundingClientRect();
+  const padLeft = hostBox.left + host.clientLeft;
+
+  // Nothing useful to measure yet — this runs once at boot, while the Analytics
+  // tab is still hidden and every offset is zero. Writing a zero width here would
+  // be harmless but pointless, and leaving style.width unset is what lets the
+  // check below recognise a genuine first placement.
+  if (activeBox.width < 1) return;
+
+  // Whether the glider has ever been placed, read off the width this function
+  // assigns rather than off its rendered box: the glider has a 1px border on each
+  // side, so its rect measures 2px even at `width: 0` and a rect-based test never
+  // sees "unplaced". Sliding in from nothing reads as a glitch, so the first real
+  // placement is instant and only later range changes animate.
+  const unplaced = !(parseFloat(glider.style.width) > 0);
+  if (unplaced) host.classList.add('no-anim');
+
+  glider.style.width = `${activeBox.width}px`;
+  glider.style.transform = `translateX(${activeBox.left - padLeft}px)`;
+
+  if (unplaced) {
+    // Two frames: one for the untransitioned values to paint, one before the
+    // transition is allowed back — removing it in the same frame re-enables it
+    // before the new width has committed, which animates anyway.
+    requestAnimationFrame(() => requestAnimationFrame(() => host.classList.remove('no-anim')));
+  }
+}
+
+/** Switch view, and mark the choice for assistive tech as well as visually. */
+function selectAnalyticsView(view) {
+  analyticsView = view;
+  for (const b of $$('#analyticsViews .seg-btn')) {
+    const on = b.dataset.view === view;
+    b.classList.toggle('active', on);
+    // The `active` class is a colour. This is the part a screen reader reads.
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  applyAnalyticsView();
+}
+
 $$('#analyticsViews .seg-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    analyticsView = btn.dataset.view;
-    $$('#analyticsViews .seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
-    applyAnalyticsView();
-  });
+  btn.addEventListener('click', () => selectAnalyticsView(btn.dataset.view));
+});
+
+// Arrows across the two views, for the same reason the range picker has them:
+// role="tablist" tells a screen reader arrows will work. Only two options here,
+// so left/up and right/down simply pick one or the other.
+$('#analyticsViews').addEventListener('keydown', (e) => {
+  const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+  const fwd = e.key === 'ArrowRight' || e.key === 'ArrowDown';
+  if (!back && !fwd) return;
+  e.preventDefault();
+  const view = back ? 'work' : 'usage';
+  if (view !== analyticsView) selectAnalyticsView(view);
+  const btn = $(`#analyticsViews .seg-btn[data-view="${view}"]`);
+  if (btn) btn.focus();
 });
 
 /**
  * Show one of the two Analytics views.
  *
- * The range selector only applies to the transcript-derived view — Claude Code's
- * stats are whole-history totals with no window to slice — so it is hidden
- * rather than left present and inert.
+ * The range picker applies to both now. It used to be hidden on the usage view,
+ * because Claude Code's stats are whole-install totals — but the cache does keep
+ * per-date rows, so the window is real for counts and apportioned for cost. See
+ * windowStats() in claude-stats.js, and the caveat the view prints.
  */
 function applyAnalyticsView() {
   const usage = analyticsView === 'usage';
   $('#analyticsBody').classList.toggle('hidden', usage);
   $('#usageBody').classList.toggle('hidden', !usage);
-  $('#analyticsRange').classList.toggle('hidden', usage);
   if (usage) renderUsage();
+  // The glider is measured from layout, and a hidden ancestor measures as zero —
+  // so re-sync now that this view is on screen.
+  syncRangePicker();
 }
 
 /** Dashboard's week strip. Reuses whatever analytics already has — never scans. */
 function renderDashWeek() {
   const hint = $('#dashWeekHint');
   if (state.config.analytics && state.config.analytics.enabled === false) {
-    $('#dashWeekHours').textContent = '—';
-    $('#dashWeekSessions').textContent = '—';
-    $('#dashWeekCost').textContent = '—';
+    stopRolling($('#dashWeekHours'), '—');
+    stopRolling($('#dashWeekSessions'), '—');
+    stopRolling($('#dashWeekCost'), '—');
     hint.textContent = 'Analytics is turned off.';
     return;
   }
   if (!analytics) {
-    hint.textContent = 'Open Analytics to read your transcripts.';
+    // Left as-is rather than blanked: if a scan is running these are rolling,
+    // and the hint below already says what is happening.
+    hint.textContent = analyticsLoading
+      ? 'Reading your transcripts…'
+      : 'Open Analytics to read your transcripts.';
     return;
   }
   const w = analytics.totals.week;
-  $('#dashWeekHours').textContent = humanDuration(w.activeMs);
-  $('#dashWeekSessions').textContent = w.sessions;
-  $('#dashWeekCost').textContent = money(w.costUsd);
+  stopRolling($('#dashWeekHours'), humanDuration(w.activeMs));
+  stopRolling($('#dashWeekSessions'), String(w.sessions));
+  stopRolling($('#dashWeekCost'), money(w.costUsd));
   hint.textContent = `${w.projects} project${w.projects === 1 ? '' : 's'} · cost is an estimate from token counts.`;
 }
 
@@ -593,13 +916,16 @@ function renderAnalytics() {
   const t = analytics.totals[analyticsRange] || analytics.totals.week;
   const label = RANGE_LABEL[analyticsRange];
 
-  $('#anHours').textContent = humanDuration(t.activeMs);
+  // stopRolling rather than a plain assignment: these four may be mid-roll from
+  // a cold scan, and setting textContent alone would leave the timer running to
+  // overwrite the real figure a frame later.
+  stopRolling($('#anHours'), humanDuration(t.activeMs));
   $('#anHoursFoot').textContent = `active time, ${label}`;
-  $('#anSessions').textContent = t.sessions;
+  stopRolling($('#anSessions'), String(t.sessions));
   $('#anSessionsFoot').textContent = `${t.projects} project${t.projects === 1 ? '' : 's'} · ${t.userMessages} prompts`;
-  $('#anCost').textContent = money(t.costUsd);
+  stopRolling($('#anCost'), money(t.costUsd));
   $('#anCostFoot').textContent = 'estimated from tokens';
-  $('#anTokens').textContent = humanCount(t.tokens);
+  stopRolling($('#anTokens'), humanCount(t.tokens));
   $('#anTokensFoot').textContent = `${t.assistantMessages} replies`;
 
   // Only mention fallback pricing when it actually happened — a permanent
@@ -622,7 +948,10 @@ function renderAnalytics() {
 function chartSeries() {
   if (analyticsRange === 'week') return { rows: analytics.daily.week, title: 'Daily activity', fmt: shortDay };
   if (analyticsRange === 'month') return { rows: analytics.daily.month, title: 'Daily activity', fmt: shortDay };
-  return { rows: (analytics.monthly && analytics.monthly.year) || [], title: 'Monthly activity', fmt: shortMonth };
+  const monthly = analytics.monthly || {};
+  // All-time has no fixed length to chart, so it borrows the 12-month shape.
+  const rows = monthly[analyticsRange] || monthly.year || [];
+  return { rows, title: 'Monthly activity', fmt: shortMonth };
 }
 
 function shortDay(key, at) {
@@ -661,7 +990,14 @@ function renderChart() {
   }
 
   const grid = el('div', 'chart-bars');
-  for (const r of rows) {
+  // A 30-day month gives each column about 16px, which is narrower than the
+  // shortest duration string — so past 14 bars the per-bar value is dropped and
+  // only every other label is drawn. Nothing is lost: the exact figures are on
+  // each column's tooltip either way, and the tag above states the peak.
+  const dense = rows.length > 14;
+  if (dense) grid.classList.add('dense');
+
+  rows.forEach((r, i) => {
     const col = el('div', 'chart-col');
     col.title = `${r.key} — ${humanDuration(r.activeMs)}, ${r.sessions} session${r.sessions === 1 ? '' : 's'}, ${money(r.costUsd)}`;
 
@@ -673,16 +1009,26 @@ function renderChart() {
     track.appendChild(bar);
     col.appendChild(track);
 
-    col.appendChild(el('div', 'chart-val', r.activeMs ? humanDuration(r.activeMs) : ''));
-    col.appendChild(el('div', 'chart-label', fmt(r.key, r.at)));
+    if (!dense) col.appendChild(el('div', 'chart-val', r.activeMs ? humanDuration(r.activeMs) : ''));
+    // Anchored to the last column rather than the first, so the most recent day
+    // is always labelled — that is the one being read.
+    const labelled = !dense || (rows.length - 1 - i) % 2 === 0;
+    col.appendChild(el('div', 'chart-label', labelled ? fmt(r.key, r.at) : ''));
     grid.appendChild(col);
-  }
+  });
   host.appendChild(grid);
 }
 
 function renderProjectBars() {
   const host = $('#projectBars');
-  const rows = (analyticsRange === 'all' && analytics.projectsAllTime) || analytics.projects || [];
+  // Ranked over the selected range, so these bars agree with the figures above
+  // them. The two older fields are the fallback for a cached report written
+  // before projectsByRange existed.
+  const byRange = analytics.projectsByRange || {};
+  const rows = byRange[analyticsRange]
+    || (analyticsRange === 'all' && analytics.projectsAllTime)
+    || analytics.projects
+    || [];
   host.replaceChildren();
 
   if (!rows.length) {
@@ -716,7 +1062,7 @@ function renderProjectBars() {
 /** Sessions in the selected window, newest first. */
 function renderSessionHistory() {
   const body = $('#analyticsBodyRows');
-  const spans = { week: 7, month: 30, year: 365, all: Number.MAX_SAFE_INTEGER };
+  const spans = { week: 7, month: 30, quarter: 90, half: 180, year: 365, all: Number.MAX_SAFE_INTEGER };
   const days = spans[analyticsRange] ?? 7;
   const from = days === Number.MAX_SAFE_INTEGER ? 0 : analytics.generatedAt - days * 86_400_000;
   const rows = (analytics.recent || []).filter((s) => (s.firstAt || 0) >= from);
@@ -798,35 +1144,54 @@ function renderUsage() {
     return;
   }
 
-  $('#usSessions').textContent = humanCount(u.totalSessions);
-  $('#usSessionsFoot').textContent = u.firstSessionAt ? `since ${new Date(u.firstSessionAt).toLocaleDateString()}` : 'all recorded history';
-  $('#usMessages').textContent = humanCount(u.totalMessages);
-  $('#usMessagesFoot').textContent = `${humanCount(u.totalToolCalls)} tool calls`;
-  $('#usTokens').textContent = humanCount(u.totalTokens);
+  // The selected window, or the all-time figures for a cached report written
+  // before windows existed.
+  const w = (u.windows && u.windows[analyticsRange]) || (u.windows && u.windows.all) || null;
+  const label = RANGE_LABEL[analyticsRange] || 'all time';
+  const ranged = Boolean(w) && analyticsRange !== 'all';
+
+  stopRolling($('#usSessions'), humanCount(w ? w.totalSessions : u.totalSessions));
+  $('#usSessionsFoot').textContent = ranged
+    ? `sessions started, ${label}`
+    : u.firstSessionAt ? `since ${new Date(u.firstSessionAt).toLocaleDateString()}` : 'all recorded history';
+  stopRolling($('#usMessages'), humanCount(w ? w.totalMessages : u.totalMessages));
+  $('#usMessagesFoot').textContent = `${humanCount(w ? w.totalToolCalls : u.totalToolCalls)} tool calls`;
+  stopRolling($('#usTokens'), humanCount(w ? w.totalTokens : u.totalTokens));
   // Cache reads are the bulk of the count and a tenth of the price, so the split
   // is worth showing rather than one huge number.
-  $('#usTokensFoot').textContent = `${humanCount(u.tokens.cacheRead)} cache read · ${humanCount(u.tokens.output)} output`;
-  $('#usCost').textContent = money(u.costUsd);
-  $('#usCostFoot').textContent = u.estimatedRates ? 'fallback rates used' : 'tokens × published rate';
+  const split = ranged
+    ? (w.models || []).reduce((acc, m) => ({ cacheRead: acc.cacheRead + m.tokens.cacheRead, output: acc.output + m.tokens.output }), { cacheRead: 0, output: 0 })
+    : u.tokens;
+  $('#usTokensFoot').textContent = `${humanCount(split.cacheRead)} cache read · ${humanCount(split.output)} output`;
+  stopRolling($('#usCost'), money(w ? w.costUsd : u.costUsd));
+  $('#usCostFoot').textContent = ranged
+    ? `apportioned, ${label}`
+    : u.estimatedRates ? 'fallback rates used' : 'tokens × published rate';
 
-  // Two caveats worth stating outright: the cache lags live work, and the money
-  // column is ours, because Claude Code reports 0 on a subscription plan.
+  // Three caveats worth stating outright: the cache lags live work, the money
+  // column is ours because Claude Code reports 0 on a subscription plan, and a
+  // windowed cost is apportioned rather than measured.
   const lag = u.computedFor ? `Claude Code last recomputed these on ${shortDate(u.computedFor)}, so today's work may be missing.` : '';
-  $('#usageNoteText').textContent = `${lag} Token counts are Claude Code's; the cost column is Lifeline's, because /usage reports $0 per model on subscription plans. Switch to "Your work" for time, projects, and per-session detail.`.trim();
-  $('#usageNote').classList.toggle('warn', Boolean(u.estimatedRates));
+  const apportioned = ranged
+    ? ` Cost for a range is apportioned: the cache stores the input/output/cache split only as an all-time total, so a window's cost is that model's total scaled by its share of tokens in the window.`
+    : '';
+  $('#usageNoteText').textContent = `${lag} Token counts are Claude Code's; the cost column is Lifeline's, because /usage reports $0 per model on subscription plans.${apportioned} Switch to "Your work" for time, projects, and per-session detail.`.trim();
+  $('#usageNote').classList.toggle('warn', Boolean(u.estimatedRates) || ranged);
 
-  renderUsageModels(u);
-  renderUsageDaily(u);
+  renderUsageModels(w || u, label, ranged);
+  renderUsageDaily(w || u, label);
   renderUsageHours(u);
   renderUsageRecords(u);
 }
 
 /** Per-model rows, cost-ordered, with an inline share-of-spend bar. */
-function renderUsageModels(u) {
+function renderUsageModels(u, label = 'all time', ranged = false) {
   const body = $('#usModelBody');
   body.replaceChildren();
   const rows = u.models || [];
-  $('#usModelTag').textContent = rows.length ? `${rows.length} model${rows.length === 1 ? '' : 's'}` : 'no usage yet';
+  $('#usModelTag').textContent = rows.length
+    ? `${rows.length} model${rows.length === 1 ? '' : 's'} · ${label}`
+    : `no usage in the ${label}`;
 
   const totalCost = rows.reduce((sum, m) => sum + m.costUsd, 0) || 1;
   for (const m of rows) {
@@ -853,7 +1218,14 @@ function renderUsageModels(u) {
     tr.appendChild(el('td', 'mono', humanCount(m.tokens.input)));
     tr.appendChild(el('td', 'mono', humanCount(m.tokens.output)));
     tr.appendChild(el('td', 'mono', humanCount(m.tokens.cacheRead)));
-    tr.appendChild(el('td', 'mono', money(m.costUsd)));
+    const costCell = el('td', 'mono', money(m.costUsd));
+    if (ranged) {
+      // A tilde, because the figure is scaled from an all-time split rather than
+      // measured over this window. Cheaper than a footnote nobody reads.
+      costCell.textContent = `~${costCell.textContent}`;
+      costCell.title = 'Apportioned from all-time totals by this window’s share of tokens.';
+    }
+    tr.appendChild(costCell);
     body.appendChild(tr);
   }
 }
@@ -864,15 +1236,18 @@ function renderUsageModels(u) {
  * Only the tail is charted: the cache keeps every day it has ever seen, and a
  * hundred 4px bars is not a chart anyone reads.
  */
-function renderUsageDaily(u) {
+function renderUsageDaily(u, label = 'all time') {
   const host = $('#usDailyChart');
   host.replaceChildren();
   const all = u.daily || [];
+  // Still capped at 30 bars regardless of range: a 365-day window would draw
+  // 365 columns 1px wide. The tag says what was dropped rather than implying
+  // the chart is the whole window.
   const rows = all.slice(-30);
   const peak = rows.reduce((m, r) => Math.max(m, r.messages), 0);
   $('#usDailyTag').textContent = rows.length
-    ? `last ${rows.length} day${rows.length === 1 ? '' : 's'}${all.length > rows.length ? ` of ${all.length}` : ''}`
-    : 'no daily data';
+    ? `last ${rows.length} day${rows.length === 1 ? '' : 's'}${all.length > rows.length ? ` of ${all.length} in the ${label}` : ''}`
+    : `no daily data in the ${label}`;
 
   if (!peak) {
     const box = el('div', 'empty');
@@ -1162,6 +1537,14 @@ function renderSettingsNav() {
   host.replaceChildren();
   for (const [id, label] of SETTINGS_SECTIONS) {
     const btn = el('button', 'settings-nav-item', label);
+    // Copy the group's rail colour onto its jump-list entry, so the two are
+    // visibly paired. Read from the group rather than duplicated here — the
+    // colours are defined once, in the stylesheet, keyed by the same id.
+    const group = document.getElementById(id);
+    if (group) {
+      const rail = getComputedStyle(group).getPropertyValue('--rail').trim();
+      if (rail) btn.style.setProperty('--rail', rail);
+    }
     btn.addEventListener('click', () => {
       const target = document.getElementById(id);
       if (!target) return;
@@ -1656,6 +2039,9 @@ setInterval(() => {
   }
 }, 15_000);
 
+// Static chrome, built once before any state arrives.
+renderRangePicker();
+
 api.getState().then(async (s) => {
   apply(s, { full: true });
   // Picks up a report an earlier launch already cached, without forcing a scan.
@@ -1665,6 +2051,8 @@ api.getState().then(async (s) => {
       analytics = snap.report;
       renderAnalytics();
       renderDashWeek();
+      // The cost column reads the same report.
+      renderSessions();
     }
   } catch {
     /* analytics is optional; the rest of the UI does not depend on it */

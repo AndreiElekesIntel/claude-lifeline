@@ -374,4 +374,39 @@ test('report exposes a monthly series for the long ranges', () => {
   const r = analytics.report({ now });
   assert.equal(r.monthly.year.length, 12);
   assert.ok(Array.isArray(r.projectsAllTime), 'all-time view has its own project ranking');
+  // Anything from a quarter up is charted monthly, so each of those ranges needs
+  // a series whose length matches the range it is standing in for.
+  assert.equal(r.monthly.quarter.length, 3);
+  assert.equal(r.monthly.half.length, 6);
+});
+
+test('report offers every range the picker does, in both totals and projects', () => {
+  reset();
+  const now = Date.parse('2026-03-15T12:00:00Z');
+  writeTranscript({ id: 'recent', messages: chat(now - 2 * 86_400_000, 4, 5, { out: 100 }) });
+  // Old enough to fall outside a week and a month, but inside a quarter — so the
+  // ranges have to differ from each other rather than all returning everything.
+  writeTranscript({ id: 'older', messages: chat(now - 45 * 86_400_000, 4, 5, { out: 100 }) });
+
+  const r = analytics.report({ now });
+  const keys = ['week', 'month', 'quarter', 'half', 'year', 'all'];
+  assert.deepEqual(Object.keys(r.totals), keys);
+  assert.deepEqual(Object.keys(r.projectsByRange), keys, 'the project bars follow the same picker');
+
+  assert.equal(r.totals.week.sessions, 1, 'only the recent one');
+  assert.equal(r.totals.quarter.sessions, 2, '45 days back is inside three months');
+  assert.equal(r.totals.all.sessions, 2);
+
+  // A window can never contain fewer sessions than a shorter one nested in it.
+  for (let i = 1; i < keys.length; i++) {
+    assert.ok(
+      r.totals[keys[i]].sessions >= r.totals[keys[i - 1]].sessions,
+      `${keys[i]} cannot hold fewer sessions than ${keys[i - 1]}`
+    );
+  }
+
+  // The month range is what the legacy `projects` field always meant, so the two
+  // must agree — the UI still reads `projects` on older cached reports.
+  assert.deepEqual(r.projectsByRange.month, r.projects);
+  assert.deepEqual(r.projectsByRange.all, r.projectsAllTime);
 });

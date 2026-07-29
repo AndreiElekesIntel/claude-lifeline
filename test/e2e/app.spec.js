@@ -325,6 +325,93 @@ test('theme switches both ways and the choice is saved', async () => {
   expect(contrast.bg).not.toBe(contrast.text);
 });
 
+/**
+ * Contrast, measured rather than eyeballed.
+ *
+ * The semantic buttons put a status colour on a tint of itself, which is the
+ * combination most likely to fall below AA — and the one least likely to be
+ * noticed, because it still looks like a deliberate design. Both themes are
+ * checked: the light palette is where these actually failed (--ok read 2.86:1
+ * against its own tint), and the dark one is where a future "let's soften that"
+ * edit would break next.
+ */
+test('status colours meet WCAG AA against the surfaces they sit on', async () => {
+  const sandbox = fx.makeSandbox('contrast');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  const audit = () =>
+    page.evaluate(() => {
+      // Both notations have to be handled explicitly. `color-mix()` resolves to
+      // `color(srgb 0.87 0.92 0.93)` — 0–1 floats — while plain colours come back
+      // as `rgb(15, 157, 99)`. Canvas is not a shortcut here: assigning an
+      // unsupported string to fillStyle is a silent no-op that leaves the previous
+      // colour in place, so a canvas probe reports the tinted buttons as whatever
+      // was painted before them and quietly passes.
+      const rgb = (css) => {
+        const n = (css.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+        if (n.length < 3) return null;
+        // srgb floats are 0–1; rgb() channels are 0–255. Nothing else uses this
+        // function, so the notation prefix is the reliable discriminator.
+        return css.startsWith('color(') ? n.map((v) => Math.round(v * 255)) : n;
+      };
+      const lum = (c) => {
+        const s = c.map((v) => {
+          const x = v / 255;
+          return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * s[0] + 0.7152 * s[1] + 0.0722 * s[2];
+      };
+      const ratio = (a, b) => {
+        const la = lum(a);
+        const lb = lum(b);
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+      };
+
+      const out = [];
+      for (const [sel, name] of [
+        ['.btn.go', 'go button'],
+        ['.btn.hold', 'hold button'],
+        ['.btn.danger', 'danger button'],
+      ]) {
+        for (const el of document.querySelectorAll(sel)) {
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+          const fg = rgb(cs.color);
+          const bg = rgb(cs.backgroundColor);
+          out.push({
+            desc: `${name} ${el.id ? '#' + el.id : ''}`,
+            fontSize: parseFloat(cs.fontSize),
+            // null rather than a number if either colour failed to parse, so an
+            // unhandled notation surfaces as a failure instead of a false pass.
+            ratio: fg && bg ? ratio(fg, bg) : null,
+          });
+        }
+      }
+      return { theme: document.documentElement.dataset.theme, out };
+    });
+
+  const problems = [];
+  for (let i = 0; i < 2; i++) {
+    // Both semantic buttons live on Settings, alongside the destructive ones.
+    await page.click('.nav-item[data-tab="settings"]');
+    const { theme, out } = await audit();
+    expect(out.length).toBeGreaterThan(0);
+    for (const c of out) {
+      if (c.ratio === null) {
+        problems.push(`${theme}: ${c.desc} — could not read its colours, so contrast is unverified`);
+      } else if (c.ratio < 4.5) {
+        // 4.5:1 is AA for normal text. These are all 13px, so the 3:1 large-text
+        // allowance does not apply to any of them.
+        problems.push(`${theme}: ${c.desc} is ${c.ratio.toFixed(2)}:1 at ${c.fontSize}px`);
+      }
+    }
+    await page.click('#themeToggle');
+  }
+
+  expect(problems.join('\n')).toBe('');
+});
+
 test('every accent choice applies immediately', async () => {
   const sandbox = fx.makeSandbox('accent');
   ctx = await fx.launch(sandbox);
@@ -612,6 +699,59 @@ test('analytics reports on the sessions it finds in transcripts', async () => {
   await expect(row).toContainText('payments-api');
 });
 
+test('the sessions table shows what each live session has cost so far', async () => {
+  const sandbox = fx.makeSandbox('session-cost');
+  const id = 'cost-1';
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: id, cwd: 'C:/work/payments-api', status: 'busy' });
+  // The cost comes from the transcript scan, joined to the live session by id —
+  // the session file itself records no tokens.
+  fx.writeTranscript(sandbox, { slug: 'payments-api', id, cwd: 'C:/work/payments-api', messages: 8 });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="sessions"]');
+  // Located by its header rather than by column number, so reordering the table
+  // does not silently point this at the wrong cell.
+  const col = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#sessionTable thead th')).findIndex((th) => th.textContent.includes('Cost'))
+  );
+  expect(col).toBeGreaterThan(-1);
+  const cell = page.locator('#sessionBody tr').first().locator('td').nth(col);
+
+  // Before the scan lands the cell is a skeleton, not a zero: zero is a claim,
+  // and this is an absence of data. It has to say "pending" to a screen reader
+  // too, since the bar contains no text at all.
+  await expect(cell).toHaveAttribute('aria-busy', 'true');
+  await expect(cell.locator('.skel')).toBeVisible();
+
+  // Opening Sessions kicks the scan off, so the figure arrives on its own.
+  await expect(cell).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+  await expect(cell).toContainText('$');
+  // Tokens in the tooltip: they are the evidence for a derived figure.
+  await expect(cell).toHaveAttribute('title', /tokens/);
+});
+
+test('with analytics off the cost column says so rather than showing a zero', async () => {
+  const sandbox = fx.makeSandbox('session-cost-off');
+  fx.writeConfig(sandbox, { version: 1, analytics: { enabled: false } });
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: 'c-off', cwd: 'C:/work/demo', status: 'busy' });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="sessions"]');
+  // Located by its header rather than by column number, so reordering the table
+  // does not silently point this at the wrong cell.
+  const col = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#sessionTable thead th')).findIndex((th) => th.textContent.includes('Cost'))
+  );
+  expect(col).toBeGreaterThan(-1);
+  const cell = page.locator('#sessionBody tr').first().locator('td').nth(col);
+  // Not a skeleton, and not "$0.00" — no scan is going to arrive, and a zero
+  // would read as a measured figure.
+  await expect(cell).toHaveText('off');
+  await expect(cell.locator('.skel')).toHaveCount(0);
+});
+
 test('the activity chart keeps a bar per day even with nothing recorded', async () => {
   const sandbox = fx.makeSandbox('analytics-empty');
   ctx = await fx.launch(sandbox);
@@ -635,9 +775,99 @@ test('the range selector switches the chart from days to months', async () => {
   await expect(page.locator('#activityChart .chart-col')).toHaveCount(7);
 
   // A year at day resolution is 365 bars, which is why the grain changes.
-  await page.selectOption('#analyticsRange', 'year');
+  await page.click('#analyticsRange .range-btn[data-range="year"]');
   await expect(page.locator('#chartTitle')).toHaveText('Monthly activity');
   await expect(page.locator('#activityChart .chart-col')).toHaveCount(12);
+
+  // Three months is still months, but a shorter axis than a year.
+  await page.click('#analyticsRange .range-btn[data-range="quarter"]');
+  await expect(page.locator('#chartTitle')).toHaveText('Monthly activity');
+  await expect(page.locator('#activityChart .chart-col')).toHaveCount(3);
+});
+
+test('the range picker marks the selected range and slides its glider onto it', async () => {
+  const sandbox = fx.makeSandbox('analytics-glider');
+  fx.writeTranscript(sandbox, { id: 'an-g', messages: 4 });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="analytics"]');
+  await expect(page.locator('#anSessions')).toHaveText('1', { timeout: 20_000 });
+
+  // Six ranges, exactly one selected, and the selection is exposed to a screen
+  // reader rather than being carried by the highlight alone.
+  await expect(page.locator('#analyticsRange .range-btn')).toHaveCount(6);
+  await expect(page.locator('#analyticsRange .range-btn[aria-selected="true"]')).toHaveCount(1);
+  await expect(page.locator('#analyticsRange .range-btn[data-range="week"]')).toHaveAttribute('aria-selected', 'true');
+
+  // The glider is one element moved by transform, so "is it on the right button"
+  // is a geometry question: its box has to sit over the active button's box.
+  const onActive = async () =>
+    page.evaluate(() => {
+      const active = document.querySelector('#analyticsRange .range-btn.active');
+      const glider = document.querySelector('#rangeGlider');
+      if (!active || !glider) return null;
+      const a = active.getBoundingClientRect();
+      const g = glider.getBoundingClientRect();
+      return { dx: Math.abs(a.x - g.x), dw: Math.abs(a.width - g.width), w: g.width };
+    });
+
+  const atWeek = await onActive();
+  expect(atWeek).not.toBeNull();
+  expect(atWeek.w).toBeGreaterThan(0); // a zero-width glider means it never measured
+  expect(atWeek.dx).toBeLessThan(2);
+  expect(atWeek.dw).toBeLessThan(2);
+
+  await page.click('#analyticsRange .range-btn[data-range="half"]');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="half"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="week"]')).toHaveAttribute('aria-selected', 'false');
+  // Wait out the slide before measuring, or the transform is caught mid-flight.
+  await page.waitForTimeout(400);
+
+  const atHalf = await onActive();
+  expect(atHalf.dx).toBeLessThan(2);
+  expect(atHalf.dw).toBeLessThan(2);
+});
+
+test('both analytics tablists are driveable from the keyboard', async () => {
+  const sandbox = fx.makeSandbox('analytics-keys');
+  fx.writeTranscript(sandbox, { id: 'an-k', messages: 4 });
+  fx.writeClaudeStats(sandbox);
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+  await page.click('.nav-item[data-tab="analytics"]');
+  await expect(page.locator('#anSessions')).toHaveText('1', { timeout: 20_000 });
+
+  // role="tablist" tells a screen reader that arrows move between the options.
+  // If they do not, the markup describes an interaction that does not exist.
+  await page.click('#analyticsRange .range-btn[data-range="week"]');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="month"]')).toHaveAttribute('aria-selected', 'true');
+  // Focus follows selection, so the next press continues from here.
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="quarter"]')).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="month"]')).toHaveAttribute('aria-selected', 'true');
+
+  await page.keyboard.press('End');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="all"]')).toHaveAttribute('aria-selected', 'true');
+  // Clamped, not wrapped: this is an ordered scale, so running off the end and
+  // reappearing at a week would lose the reader's place.
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="all"]')).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Home');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="week"]')).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#analyticsRange .range-btn[data-range="week"]')).toHaveAttribute('aria-selected', 'true');
+
+  // The view switch carries the same role, and has to keep the same promise.
+  await page.click('#analyticsViews .seg-btn[data-view="work"]');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#usageBody')).toBeVisible();
+  await expect(page.locator('#analyticsViews .seg-btn[data-view="usage"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#analyticsViews .seg-btn[data-view="work"]')).toHaveAttribute('aria-selected', 'false');
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#analyticsBody')).toBeVisible();
+  await expect(page.locator('#analyticsViews .seg-btn[data-view="work"]')).toHaveAttribute('aria-selected', 'true');
 });
 
 test('turning analytics off stops the scan and explains why the tab is empty', async () => {
@@ -671,14 +901,16 @@ test('the usage view reads Claude Code’s own /usage statistics', async () => {
 
   await page.click('.nav-item[data-tab="analytics"]');
   await page.click('#analyticsViews .seg-btn[data-view="usage"]');
+  await expect(page.locator('#usageMissing')).toBeHidden({ timeout: 20_000 });
 
-  await expect(page.locator('#usSessions')).toHaveText('267', { timeout: 20_000 });
+  // The range picker drives this view too, and it stays visible across both.
+  await expect(page.locator('#analyticsRange')).toBeVisible();
+
+  // All time, so these are the file's own whole-install totals rather than a
+  // window summed from its per-date rows.
+  await page.click('#analyticsRange .range-btn[data-range="all"]');
+  await expect(page.locator('#usSessions')).toHaveText('267');
   await expect(page.locator('#usMessages')).toHaveText('107.8K');
-  await expect(page.locator('#usageMissing')).toBeHidden();
-
-  // The range selector has no meaning for whole-history totals, so it goes away
-  // rather than sitting there inert.
-  await expect(page.locator('#analyticsRange')).toBeHidden();
 
   // Ordered by cost, not tokens: haiku has more tokens and costs far less.
   const rows = page.locator('#usModelBody tr');
@@ -691,6 +923,49 @@ test('the usage view reads Claude Code’s own /usage statistics', async () => {
 
   await expect(page.locator('#usHourChart .chart-col')).toHaveCount(24);
   await expect(page.locator('#usRecords .hero-metric')).toHaveCount(4);
+});
+
+test('the usage view windows its counts, and says which figures are apportioned', async () => {
+  const sandbox = fx.makeSandbox('usage-range');
+  // The fixture's per-date rows cover today and yesterday only, and mention just
+  // opus. Whole-install totals are much larger — which is the whole point: a
+  // windowed figure has to come from the dated rows, not from these.
+  fx.writeClaudeStats(sandbox, {
+    totalSessions: 267,
+    totalMessages: 107842,
+    modelUsage: {
+      'claude-opus-4-8': { inputTokens: 1e6, outputTokens: 2e6, cacheReadInputTokens: 5e8, costUSD: 0 },
+      'claude-haiku-4-5-20251001': { inputTokens: 1e7, outputTokens: 2e7, cacheReadInputTokens: 9e8, costUSD: 0 },
+    },
+  });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="analytics"]');
+  await page.click('#analyticsViews .seg-btn[data-view="usage"]');
+  await expect(page.locator('#usageMissing')).toBeHidden({ timeout: 20_000 });
+
+  // Past 7 days: 3 sessions yesterday + 9 today, summed from dailyActivity —
+  // not the 267 the file reports for the whole install.
+  await page.click('#analyticsRange .range-btn[data-range="week"]');
+  await expect(page.locator('#usSessions')).toHaveText('12');
+  await expect(page.locator('#usMessages')).toHaveText('480');
+  await expect(page.locator('#usSessionsFoot')).toContainText('past 7 days');
+
+  // Only opus appears in the dated rows, so haiku is absent from the window
+  // rather than being carried in at its all-time size.
+  await expect(page.locator('#usModelBody tr')).toHaveCount(1);
+  await expect(page.locator('#usModelBody tr').first()).toContainText('opus-4-8');
+
+  // A windowed cost cannot be measured from this cache, and the view says so
+  // instead of presenting the estimate as fact.
+  await expect(page.locator('#usCostFoot')).toContainText('apportioned');
+  await expect(page.locator('#usageNote')).toContainText('apportioned');
+
+  // Back to all time and the caveat goes away with it.
+  await page.click('#analyticsRange .range-btn[data-range="all"]');
+  await expect(page.locator('#usSessions')).toHaveText('267');
+  await expect(page.locator('#usageNote')).not.toContainText('apportioned');
 });
 
 test('with no stats file the usage view asks the user to run /usage', async () => {

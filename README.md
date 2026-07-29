@@ -125,19 +125,21 @@ Seven tabs, dark and light, and a tray icon whose colour tells you the state at 
 
 ### Sessions
 
-Every Claude Code session on the machine, live. Strictly read-only: it reads the JSON records Claude Code maintains and probes liveness with signal 0, which tests for a process without affecting it. Watching your sessions can never disturb them.
+Every Claude Code session on the machine, live — including what each one has cost so far. Strictly read-only: it reads the JSON records Claude Code maintains and probes liveness with signal 0, which tests for a process without affecting it. Watching your sessions can never disturb them.
 
 ![Sessions](docs/screenshots/sessions-dark.png)
 
 ### Analytics
 
-Time worked, sessions, tokens and estimated spend — computed here, on this machine, from transcripts Claude Code already wrote. Nothing is sent anywhere and nothing is written back.
+Time worked, sessions, tokens and estimated spend — computed here, on this machine, from transcripts Claude Code already wrote. Nothing is sent anywhere and nothing is written back. Every figure and chart answers to the range picker at the top: a week, a month, three, six, twelve, or all time.
 
 ![Analytics](docs/screenshots/analytics-dark.png)
 
-There is a second view over Claude Code's own `/usage` statistics, which knows things transcripts do not — all-time totals, per-model splits, your longest session ever:
+There is a second view over Claude Code's own `/usage` statistics, which knows things transcripts do not — all-time totals, per-model splits, your longest session ever. It takes the same range:
 
 ![Usage and models](docs/screenshots/usage-dark.png)
+
+Windowed per-model costs are marked as apportioned, and they are: `/usage` records the input/output/cache split only as an all-time total, and those four are priced about tenfold apart, so a window can only scale the model's all-time cost by its share of the tokens. At all time the figures are measured, not apportioned.
 
 Cost is an estimate by construction: Claude Code records tokens, not money, so these are tokens × published rate and will not match a subscription bill. The rates are editable under Settings → Analytics & cost for exactly that reason.
 

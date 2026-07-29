@@ -97,7 +97,10 @@
               <h1>Dashboard</h1>
               <p class="subtitle" id="dashSubtitle">Watching your Claude Code sessions.</p>
             </div>
-            <button class="btn primary" id="btnToggleProtection">Pause protection</button>
+            <!-- renderStatus() swaps this between .hold and .go; amber here
+                 matches the default enabled state so there is no colour flash
+                 on the first paint. -->
+            <button class="btn hold" id="btnToggleProtection">Pause protection</button>
           </div>
 
           <!-- Shown until the hooks are installed: without them nothing is
@@ -111,7 +114,7 @@
                 protected.</span
               >
             </div>
-            <button class="btn primary" id="btnInstallHooks">Install now</button>
+            <button class="btn go" id="btnInstallHooks">Install now</button>
           </div>
 
           <div class="stat-grid">
@@ -207,6 +210,10 @@
                   <th>Session</th>
                   <th>Project</th>
                   <th>State</th>
+                  <!-- Cost so far for this session, joined from the analytics
+                       scan by session id. Empty until Analytics has run once,
+                       since that is what reads the transcripts. -->
+                  <th>Cost so far</th>
                   <th>Last update</th>
                   <th>PID</th>
                 </tr>
@@ -232,12 +239,13 @@
               </p>
             </div>
             <div class="head-actions">
-              <select id="analyticsRange" class="select">
-                <option value="week">Past week</option>
-                <option value="month">Past month</option>
-                <option value="year">Past year</option>
-                <option value="all">All time</option>
-              </select>
+              <!-- Six ranges as a segmented control rather than a dropdown: the
+                   whole point is comparing them, and a <select> hides five of
+                   the six behind a click. Buttons are built by renderRangePicker()
+                   so the range list lives in one place in app.js. -->
+              <div class="range-picker" id="analyticsRange" role="tablist" aria-label="Time range">
+                <span class="range-glider" id="rangeGlider" aria-hidden="true"></span>
+              </div>
               <button class="btn ghost" id="btnRefreshAnalytics">Refresh</button>
             </div>
           </div>
@@ -246,8 +254,8 @@
                is the only one that knows time, cost, and projects; "Usage" is
                Claude Code's own /usage data, which reaches further back. -->
           <div class="segmented" id="analyticsViews" role="tablist">
-            <button class="seg-btn active" data-view="work" role="tab">Your work</button>
-            <button class="seg-btn" data-view="usage" role="tab">Usage &amp; models</button>
+            <button class="seg-btn active" data-view="work" role="tab" aria-selected="true">Your work</button>
+            <button class="seg-btn" data-view="usage" role="tab" aria-selected="false">Usage &amp; models</button>
           </div>
 
           <!-- Analytics off, or nothing scanned yet. -->
@@ -444,7 +452,7 @@
             </div>
             <div class="head-actions">
               <button class="btn ghost" id="btnCoverageRecommended">Restore recommended</button>
-              <button class="btn ghost" id="btnCoverageAll">Enable all</button>
+              <button class="btn go" id="btnCoverageAll">Enable all</button>
             </div>
           </div>
 
@@ -535,7 +543,9 @@
               <h1>Settings</h1>
               <p class="subtitle">Changes save immediately and apply to the next failure.</p>
             </div>
-            <button class="btn ghost" id="btnResetConfig">Reset to defaults</button>
+            <!-- Red because it discards every setting on the page, which is not
+                 obvious from a label that sounds like a tidy-up. -->
+            <button class="btn danger" id="btnResetConfig">Reset to defaults</button>
           </div>
 
           <!-- Section jump list. The page is long by nature — one screen per
@@ -556,8 +566,8 @@
             </div>
             <div class="hook-status" id="hookStatus"></div>
             <div class="row-actions">
-              <button class="btn primary" id="btnInstallHooks2">Install / repair hooks</button>
-              <button class="btn danger ghost" id="btnUninstallHooks">Remove hooks</button>
+              <button class="btn go" id="btnInstallHooks2">Install / repair hooks</button>
+              <button class="btn danger" id="btnUninstallHooks">Remove hooks</button>
               <button class="btn ghost" id="btnOpenSettings">Open settings.json</button>
             </div>
           </div>

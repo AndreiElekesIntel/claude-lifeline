@@ -552,6 +552,8 @@ function report({ now = Date.now(), pricingOverrides = null, sessionLimit = 50 }
     totals: {
       week: windowTotals(sessions, 7 * DAY_MS, now),
       month: windowTotals(sessions, 30 * DAY_MS, now),
+      quarter: windowTotals(sessions, 90 * DAY_MS, now),
+      half: windowTotals(sessions, 180 * DAY_MS, now),
       year: windowTotals(sessions, 365 * DAY_MS, now),
       all: windowTotals(sessions, Number.MAX_SAFE_INTEGER, now),
     },
@@ -559,12 +561,25 @@ function report({ now = Date.now(), pricingOverrides = null, sessionLimit = 50 }
       week: dailySeries(sessions, 7, now),
       month: dailySeries(sessions, 30, now),
     },
-    // Months for the long ranges: 365 daily bars is unreadable, and "all time"
-    // has no fixed length to chart at all, so it reuses the year's shape.
+    // Months for the long ranges: 90 daily bars is already too dense to read at
+    // this width, 365 is noise, and "all time" has no fixed length to chart at
+    // all — so everything from a quarter up is charted monthly, and all-time
+    // reuses the year's shape.
     monthly: {
+      quarter: monthlySeries(sessions, 3, now),
+      half: monthlySeries(sessions, 6, now),
       year: monthlySeries(sessions, 12, now),
     },
     projects: topProjects(sessions, 30 * DAY_MS, now),
+    /** Busiest projects per range, so the bars agree with the figures above them. */
+    projectsByRange: {
+      week: topProjects(sessions, 7 * DAY_MS, now),
+      month: topProjects(sessions, 30 * DAY_MS, now),
+      quarter: topProjects(sessions, 90 * DAY_MS, now),
+      half: topProjects(sessions, 180 * DAY_MS, now),
+      year: topProjects(sessions, 365 * DAY_MS, now),
+      all: topProjects(sessions, Number.MAX_SAFE_INTEGER, now),
+    },
     /** Busiest projects over the whole history, for the all-time view. */
     projectsAllTime: topProjects(sessions, Number.MAX_SAFE_INTEGER, now),
     recent: sessions.slice(0, sessionLimit).map((s) => ({
