@@ -66,6 +66,8 @@ Scroll down and it tells you where every byte it writes lives, so you can go and
 
 ![About, paths](https://raw.githubusercontent.com/AndreiElekesIntel/claude-lifeline/main/docs/screenshots/about-detail-dark.png)
 
+The version you are running is the first chip at the top, and the foot of the page carries the whole build string — app, Electron, Chromium, Node, and the config schema version. That line is selectable so it can be pasted straight into an issue, which is the only reason it exists: "which version" and "which Electron" are the first two questions any rendering bug needs answered.
+
 ## Light theme
 
 Follows Windows by default, or pick one.

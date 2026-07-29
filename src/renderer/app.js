@@ -1831,11 +1831,20 @@ const ABOUT_RETRY = [
 ];
 
 function renderAbout() {
+  // Absent only if an older main process is somehow paired with this renderer —
+  // which the dev workflow makes possible. Better a chip that reads "unknown"
+  // than a crash on the tab that exists to answer "what am I running".
+  const versions = state.versions || {};
+  const appVersion = versions.app ? `v${versions.app}` : 'version unknown';
+
   const chips = $('#aboutChips');
   chips.replaceChildren();
   for (const [text, tone] of [
+    // First chip, and accented: the version is the single most-asked question an
+    // about page answers, so it leads rather than sitting among the build trivia.
+    [appVersion, 'accent'],
     ['Windows 11', ''],
-    ['Electron', ''],
+    [versions.electron ? `Electron ${versions.electron}` : 'Electron', ''],
     ['Zero runtime dependencies', 'ok'],
     ['MIT licensed', 'info'],
   ]) {
@@ -1914,11 +1923,24 @@ function renderAbout() {
 
   const foot = $('#aboutFoot');
   foot.replaceChildren();
+  // The full build string, in the place a build string conventionally goes. The
+  // chip above answers "which version" at a glance; this answers the follow-up
+  // that an issue report needs, so it is selectable text rather than a chip.
+  const build = [
+    `Claude Lifeline ${appVersion}`,
+    versions.electron ? `Electron ${versions.electron}` : null,
+    versions.chrome ? `Chromium ${versions.chrome}` : null,
+    versions.node ? `Node ${versions.node}` : null,
+    versions.schema != null ? `config schema v${versions.schema}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  foot.appendChild(el('span', 'about-build', build));
   foot.appendChild(
     el(
       'span',
       null,
-      'Claude Lifeline — an unofficial companion for Claude Code, built with Claude Opus 5 in Claude Code. Not affiliated with Anthropic.'
+      'An unofficial companion for Claude Code, built with Claude Opus 5 in Claude Code. Not affiliated with Anthropic.'
     )
   );
 }

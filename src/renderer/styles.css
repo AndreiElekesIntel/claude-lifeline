@@ -1079,7 +1079,13 @@ button.path-row:hover .path-open, button.path-row:focus-visible .path-open { opa
   .built-with { flex-direction: column; gap: 10px; }
 }
 
-.about-foot { padding: 4px 2px 10px; font-size: 12px; color: var(--text-faint); }
+/* A column, because it holds two independent lines — the build string and the
+   affiliation note. Inline spans would run them into one sentence that reads as
+   though Node 22 were the thing not affiliated with Anthropic. */
+.about-foot { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px 10px; font-size: 12px; color: var(--text-faint); }
+/* Tabular figures so the version numbers line up, and selectable-looking:
+   this is the line people copy into an issue report. */
+.about-build { font-variant-numeric: tabular-nums; color: var(--text-dim); user-select: text; }
 
 /* ---------- Toasts ---------- */
 .toast-host { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
