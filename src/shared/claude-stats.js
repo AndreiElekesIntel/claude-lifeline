@@ -192,25 +192,47 @@ function windowStats(raw, models, daily, days, now = Date.now()) {
 
   const windowed = [];
   for (const m of models) {
-    const tokens = all ? m.total : (perModelTokens.get(m.model) || 0);
-    if (!all && tokens === 0) continue; // unused in this window
-    const share = m.total > 0 ? tokens / m.total : 0;
+    const dailyTokens = perModelTokens.get(m.model) || 0;
+    if (!all && dailyTokens === 0) continue; // unused in this window
+
+    /**
+     * The share of this model's history that falls in the window.
+     *
+     * The denominator is input+output, *not* `m.total`, because that is what the
+     * numerator counts: `dailyModelTokens` records only uncached traffic. Verified
+     * exactly against this machine's cache — summing every daily row per model
+     * reproduces `inputTokens + outputTokens` to the token for all three models
+     * (opus 62,598,730; haiku 154,949; sonnet 63,751) while being 0.5% of their
+     * `total`, because cache reads are ~99% of the count and are absent from the
+     * daily rows entirely.
+     *
+     * Dividing by `m.total` was therefore comparing two different quantities and
+     * shrinking every window by the cache ratio — roughly 200x. It reported $10.77
+     * for a week whose transcripts say ~$2,500, which is what made the bug visible.
+     */
+    const uncached = m.tokens.input + m.tokens.output;
+    const share = uncached > 0 ? Math.min(1, dailyTokens / uncached) : 0;
+
+    // Reconstructed by scaling the all-time split, rather than reported as the raw
+    // daily figure: `dailyTokens` omits cache traffic, so using it directly would
+    // say a week cost 200x less than it did. This is the apportionment the
+    // `apportioned` flag warns about, and it assumes a steady cache-hit ratio.
+    const scaled = {
+      input: Math.round(m.tokens.input * share),
+      output: Math.round(m.tokens.output * share),
+      cacheWrite: Math.round(m.tokens.cacheWrite * share),
+      cacheRead: Math.round(m.tokens.cacheRead * share),
+    };
+
     windowed.push({
       model: m.model,
-      total: tokens,
-      // Scaled by the same share, so the split still adds up to `total` and the
-      // UI's input/output columns stay consistent with it.
-      tokens: all
-        ? m.tokens
-        : {
-            input: Math.round(m.tokens.input * share),
-            output: Math.round(m.tokens.output * share),
-            cacheWrite: Math.round(m.tokens.cacheWrite * share),
-            cacheRead: Math.round(m.tokens.cacheRead * share),
-          },
+      total: all ? m.total : scaled.input + scaled.output + scaled.cacheWrite + scaled.cacheRead,
+      tokens: all ? m.tokens : scaled,
       costUsd: all ? m.costUsd : m.costUsd * share,
       estimatedRates: m.estimatedRates,
       apportioned: !all,
+      /** What the cache actually recorded for this window, before scaling. */
+      uncachedTokens: all ? uncached : dailyTokens,
     });
   }
   windowed.sort((a, b) => b.costUsd - a.costUsd);
@@ -227,9 +249,13 @@ function windowStats(raw, models, daily, days, now = Date.now()) {
     totalMessages: all ? num(raw.totalMessages) : totalMessages,
     totalSessions: all ? num(raw.totalSessions) : totalSessions,
     totalToolCalls,
-    // Same reasoning: at all-time this is the per-model sum, which is what the
-    // rest of the report shows and is not subject to daily-row pruning.
-    totalTokens: all ? windowed.reduce((sum, m) => sum + m.total, 0) : totalTokens,
+    // The per-model sum in both cases. For a window that means the *scaled* totals
+    // rather than `totalTokens` summed off the daily rows: those rows exclude cache
+    // traffic, so using them here would print a token count ~200x below the cost
+    // shown beside it. See the share calculation above.
+    totalTokens: windowed.reduce((sum, m) => sum + m.total, 0),
+    /** Uncached tokens as actually recorded, unscaled — the measured figure. */
+    uncachedTokens: totalTokens,
     models: windowed,
     costUsd: windowed.reduce((sum, m) => sum + m.costUsd, 0),
     /** True when any figure here was apportioned rather than measured. */

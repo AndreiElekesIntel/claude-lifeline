@@ -434,6 +434,21 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
    minimum lets the track stay at its fraction and makes the child scroll or
    ellipsis instead. */
 .panel-row { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+/* The one section-level box that used to carry no bottom margin, while every one
+   of its siblings does — `.settings-group`, `.stat-grid` and `.segmented` all
+   space themselves. So whatever followed a panel row sat flush against it: three
+   0px seams on Analytics and one on About, none of which any test could see while
+   the sibling check only looked for overlap. Matching `.settings-group`'s 14px
+   makes a panel row space itself like everything else it sits next to.
+
+   The Analytics views additionally set a container `gap` (see #analyticsBody),
+   which is the more robust pattern — a container gap cannot be forgotten by a
+   section added later. This margin is what makes a panel row safe *outside* those
+   two containers, where About puts it. */
+.panel-row { margin-bottom: 14px; }
+/* Nothing below it to space away from, and a trailing margin inside a scroll
+   container reads as the page having stopped short of its own end. */
+.panel-row:last-child { margin-bottom: 0; }
 /* The window's own minimum is 880px, but it can be narrower than the layout's
    comfortable width, so both panel-row variants collapse together. */
 @media (max-width: 1000px) {
@@ -571,6 +586,28 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 /* minmax(0, …) for the same reason as .panel-row — see the note there. */
 .panel-row.wide-left { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
 
+/* The Analytics views stack their sections with a gap instead of relying on each
+   child's own margin-bottom.
+ *
+ * The margin approach is what left three 0px seams here: .stat-grid, .segmented
+ * and .settings-group each carry a bottom margin, but .panel-row never did — so
+ * anything following a panel row sat flush against it. A row-gap on the container
+ * spaces every child the same way regardless of what it is, and cannot be missed
+ * by a section added later.
+ *
+ * `> * + *` zeroes the redundant margins the children bring with them, so the gap
+ * is the single source of vertical rhythm rather than adding to a margin. */
+#analyticsBody,
+#usageContent { display: flex; flex-direction: column; gap: 20px; }
+#analyticsBody > * + *,
+#usageContent > * + * { margin-top: 0; }
+#analyticsBody > *,
+#usageContent > * { margin-bottom: 0; }
+/* An empty grid row still creates a gap on both sides of itself, which reads as a
+   double-height blank band. Nothing to lay out means nothing to space. */
+#analyticsBody > .panel-row:empty,
+#usageContent > .panel-row:empty { display: none; }
+
 /* Two views of the same tab. A pill pair rather than a second nav level: the
    choice is which *source* to read, not where you are in the app. */
 .segmented {
@@ -655,8 +692,17 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 /* Both clip rather than push: at 30 bars a column is ~16px wide, and a nowrap
    string with nowhere to go widens its column, then its grid track, then the
    whole panel row. Overflow keeps the overrun inside the column. */
-.chart-val { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.chart-label { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+/* The reserved height is what keeps the bars comparable. Every chart here draws a
+   label div in *every* column but leaves it empty in the ones it does not label
+   (hours not divisible by three, alternate days in dense mode). An empty div is
+   0px tall, a filled one is ~13px — and because the column is a flex column whose
+   track takes the remainder, that 13px comes out of the bar. The labelled columns
+   were drawing systematically shorter than their neighbours: hour 12 with 30
+   sessions rendered 105px next to hour 16's 118px for 29. The chart said "less"
+   where the data said "more", every third column. A fixed line box makes an empty
+   label occupy exactly what a filled one does, so height means only the value. */
+.chart-val { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; line-height: 14px; min-height: 14px; }
+.chart-label { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; line-height: 14px; min-height: 14px; }
 /* Dense charts drop the per-bar value (see renderChart), so the columns give
    that row's height back to the bars instead of leaving a blank band. */
 .chart-bars.dense { gap: 2px; }
@@ -914,8 +960,13 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   border-top: 1px solid var(--border);
 }
 /* Reused outside the About hero (Analytics → Records), where there is no hero
-   above to separate from. */
-.hero-metrics.flush { margin-top: 0; padding-top: 0; border-top: 0; }
+   above to separate from — so the rule drops the divider and its padding.
+ *
+ * It keeps a top margin, though. Zeroing all three put the metrics flush against
+ * the group heading above them: what is not wanted here is the *border*, not the
+ * spacing, and a heading touching its own content is the thing this file has a
+ * test for. */
+.hero-metrics.flush { margin-top: 14px; padding-top: 0; border-top: 0; }
 .hero-metric { display: flex; flex-direction: column; gap: 2px; }
 .hero-metric-num { font-size: 22px; font-weight: 660; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .hero-metric-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-faint); }

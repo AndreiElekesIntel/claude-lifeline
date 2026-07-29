@@ -361,7 +361,10 @@
             <div id="usageContent">
               <div class="stat-grid">
                 <div class="stat-card">
-                  <div class="stat-label">Sessions all time</div>
+                  <!-- Labels say only what the figure is; the range lives in the foot
+                       line, which follows the picker. A static "all time" here read
+                       "SESSIONS ALL TIME / 12 / sessions started, past 7 days". -->
+                  <div class="stat-label">Sessions</div>
                   <div class="stat-value" id="usSessions">—</div>
                   <div class="stat-foot" id="usSessionsFoot">&nbsp;</div>
                 </div>
@@ -371,7 +374,7 @@
                   <div class="stat-foot" id="usMessagesFoot">&nbsp;</div>
                 </div>
                 <div class="stat-card">
-                  <div class="stat-label">Tokens all time</div>
+                  <div class="stat-label">Tokens</div>
                   <div class="stat-value accent" id="usTokens">—</div>
                   <div class="stat-foot" id="usTokensFoot">&nbsp;</div>
                 </div>
@@ -423,7 +426,12 @@
                     <span class="panel-tag" id="usHourTag"></span>
                   </div>
                   <div class="chart short" id="usHourChart"></div>
-                  <p class="panel-hint tight">Sessions started per hour of the day, across your whole history.</p>
+                  <!-- The one panel here that ignores the range picker, so it says
+                       so outright. Claude Code stores hour-of-day as a single
+                       install-wide tally with no dates attached, so there is
+                       nothing to slice a week out of — better to state that than
+                       to sit silently under a picker and look like it responded. -->
+                  <p class="panel-hint tight">Sessions started per hour of the day. Always your whole history — Claude Code records these hours without dates, so this one chart cannot follow the range above.</p>
                 </div>
               </div>
 

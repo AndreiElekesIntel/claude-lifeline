@@ -17,6 +17,8 @@
     "test:e2e": "playwright test",
     "test:all": "npm test && npm run test:e2e",
     "screenshots": "node scripts/screenshots.mjs",
+    "wiki": "node scripts/publish-wiki.mjs",
+    "wiki:dry": "node scripts/publish-wiki.mjs --dry-run",
     "lint": "node scripts/lint.mjs",
     "install-hook": "node scripts/cli.mjs install",
     "uninstall-hook": "node scripts/cli.mjs uninstall",

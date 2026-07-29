@@ -262,6 +262,120 @@ test('stacked siblings keep a real gap and never overlap', async () => {
   expect(problems.join('\n')).toBe('');
 });
 
+/**
+ * Top-level sections keep a real gap, and the whole page is walked to check it.
+ *
+ * Two gaps in the test above that this one closes:
+ *
+ *   1. **`gap < -1` only catches overlap.** A 0px seam between two panels is a
+ *      *positive* gap, so it passed silently. Three of them shipped on Analytics:
+ *      `#analyticsBody` and `#usageContent` had no CSS of their own and spacing
+ *      relied on each child's `margin-bottom`, which `.panel-row` never had — so
+ *      anything following a panel row sat flush against it. Only a minimum-gap
+ *      assertion can see that.
+ *   2. **Nothing scrolled.** Measuring is scroll-independent here, but *rendering*
+ *      is not: transitions, sticky headers and anything that lays out on first
+ *      paint behave differently once the page has moved. Walking each tab from top
+ *      to bottom in viewport-sized steps measures what a user scrolling actually
+ *      gets rather than only the opening screenful.
+ *
+ * Scoped to a section's immediate children rather than every descendant: a stat
+ * card's label sitting 0px from its value is deliberate typography, whereas two
+ * top-level boxes touching is always a mistake.
+ */
+test('top-level sections keep a real gap, through the full scroll height', async () => {
+  const sandbox = fx.makeSandbox('sections');
+  seedAll(sandbox);
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  /** Below this two boxes read as one. Section spacing in this app is 14–20px. */
+  const MIN_GAP = 6;
+  const problems = [];
+
+  for (const vp of WIDTHS) {
+    await page.setViewportSize({ width: vp.width, height: vp.height });
+    for (const tab of TABS) {
+      await openTab(page, tab);
+
+      // Walk the whole page. `- 40` overlaps each step slightly so a seam landing
+      // exactly on a step boundary is measured with both boxes laid out.
+      const { total, viewport } = await page.evaluate(() => {
+        const sc = document.querySelector('.tab.active') || document.querySelector('.tab:not(.hidden)');
+        const host = sc && sc.scrollHeight > sc.clientHeight ? sc : document.scrollingElement;
+        return { total: host.scrollHeight, viewport: host.clientHeight };
+      });
+      const step = Math.max(200, viewport - 40);
+      const stops = [];
+      for (let y = 0; y < Math.max(1, total - viewport) + step; y += step) stops.push(Math.min(y, Math.max(0, total - viewport)));
+      if (!stops.length) stops.push(0);
+
+      for (const y of [...new Set(stops)]) {
+        await page.evaluate((top) => {
+          const sc = document.querySelector('.tab.active') || document.querySelector('.tab:not(.hidden)');
+          const host = sc && sc.scrollHeight > sc.clientHeight ? sc : document.scrollingElement;
+          host.scrollTop = top;
+        }, y);
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+        const found = await page.evaluate((minGap) => {
+          const out = [];
+          const root = document.querySelector('.tab.active') || document.querySelector('.tab:not(.hidden)');
+          if (!root) return out;
+
+          const visible = (el) => {
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return false;
+            if (cs.position === 'absolute' || cs.position === 'fixed' || cs.position === 'sticky') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
+          const label = (el) => {
+            const id = el.id ? `#${el.id}` : '';
+            const cls = typeof el.className === 'string' && el.className ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}` : '';
+            return `${el.tagName.toLowerCase()}${id}${cls}`;
+          };
+
+          // The containers whose children are page sections. Anything deeper is
+          // component-internal spacing, which is a design choice, not a seam.
+          const sections = [root, ...root.querySelectorAll('.tab-body, .stack, .section, #analyticsBody, #usageContent')];
+          for (const parent of new Set(sections)) {
+            const cs = getComputedStyle(parent);
+            const stacked = cs.display === 'block' || (cs.display === 'flex' && cs.flexDirection === 'column');
+            if (!stacked) continue;
+
+            const kids = Array.from(parent.children).filter(visible);
+            for (let i = 0; i < kids.length - 1; i++) {
+              const a = kids[i].getBoundingClientRect();
+              const b = kids[i + 1].getBoundingClientRect();
+              const sharesX = Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2;
+              if (!sharesX) continue;
+              const gap = b.top - a.bottom;
+              if (gap < minGap) {
+                out.push({
+                  gap: Math.round(gap),
+                  parent: label(parent),
+                  a: label(kids[i]),
+                  b: label(kids[i + 1]),
+                });
+              }
+            }
+          }
+          return out;
+        }, MIN_GAP);
+
+        for (const f of found) {
+          const at = `${vp.name}/${tab}@${y}`;
+          const msg = `${at}: inside ${f.parent}, ${f.a} sits ${f.gap}px from ${f.b} (min ${MIN_GAP}px)`;
+          if (!problems.some((p) => p.slice(p.indexOf(':')) === msg.slice(msg.indexOf(':')))) problems.push(msg);
+        }
+      }
+    }
+  }
+
+  expect(problems.join('\n')).toBe('');
+});
+
 /* ============ headings are not flush against their body text ============ */
 
 test('a heading is never flush against the text below it', async () => {
@@ -421,6 +535,35 @@ test('no analytics range or view clips text, overflows, or collides', async () =
           problems.push(`${where}: ${it.desc} extends ${Math.round(it.x + it.w - tabBox.x - tabBox.w)}px past the right edge`);
         }
       }
+
+      // Section seams, per range and view. This is where the three 0px seams were
+      // found: `.panel-row` carried no bottom margin while its siblings did, so
+      // whatever followed one sat flush — and only on some ranges, because which
+      // sections render at all depends on the window having data.
+      const seams = await page.evaluate(() => {
+        const out = [];
+        for (const id of ['analyticsBody', 'usageContent']) {
+          const parent = document.getElementById(id);
+          if (!parent || getComputedStyle(parent).display === 'none') continue;
+          const kids = Array.from(parent.children).filter((el) => {
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          });
+          for (let i = 0; i < kids.length - 1; i++) {
+            const a = kids[i].getBoundingClientRect();
+            const b = kids[i + 1].getBoundingClientRect();
+            const gap = b.top - a.bottom;
+            if (gap < 6) {
+              const lab = (el) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/)[0] : ''}`;
+              out.push(`#${id}: ${lab(kids[i])} sits ${Math.round(gap)}px from ${lab(kids[i + 1])}`);
+            }
+          }
+        }
+        return out;
+      });
+      for (const s of seams) problems.push(`${where}: ${s}`);
 
       // The glider is absolutely positioned, so it is exempt from the checks
       // above — but it is the one element whose whole job is to be in the right

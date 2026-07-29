@@ -216,7 +216,15 @@ test('a window sums the dated rows rather than reusing the install-wide totals',
   assert.equal(w.totalSessions, 11);
   assert.equal(w.totalMessages, 500);
   assert.equal(w.totalToolCalls, 150);
-  assert.equal(w.totalTokens, 17_000);
+  // 5,000 + 10,000 + 2,000 as the dated rows literally record it. This is the
+  // *measured* figure and it excludes cache traffic, because `dailyModelTokens`
+  // does — which is why it is reported separately from `totalTokens` below rather
+  // than being passed off as a token count comparable to the all-time one.
+  assert.equal(w.uncachedTokens, 17_000);
+  // The scaled total, which is what sits next to the window's cost in the UI. It is
+  // ~150x larger than the rows above because those omit cache reads entirely; a
+  // token count 150x below the cost beside it is what this figure exists to avoid.
+  assert.equal(w.totalTokens, 2_592_000);
   assert.equal(w.daysWithData, 2);
   assert.equal(w.days, 7);
 });
@@ -257,8 +265,11 @@ test('a window keeps only the models that actually appear in it', () => {
   // rows must not be carried in at its all-time size at all.
   assert.deepEqual(w.models.map((m) => m.model).sort(), ['claude-haiku-4-5-20251001', 'claude-opus-4-8']);
   const haiku = w.models.find((m) => m.model === 'claude-haiku-4-5-20251001');
-  assert.equal(haiku.total, 2_000);
-  assert.ok(haiku.total < 900_000_000);
+  // 2,000 of haiku's 30,000,000 uncached tokens is a 1/15,000 share, which scales
+  // its 930M all-time total to 62,000 — cache reads included, as the cost is.
+  assert.equal(haiku.uncachedTokens, 2_000);
+  assert.equal(haiku.total, 62_000);
+  assert.ok(haiku.total < 900_000_000, 'and nowhere near its all-time size');
 });
 
 test('a model with no tokens in the window is dropped, not zero-filled', () => {
@@ -275,14 +286,49 @@ test('windowed cost is apportioned by token share, and says that it is', () => {
   const opusAll = r.models.find((m) => m.model === 'claude-opus-4-8');
   const opusWk = w.models.find((m) => m.model === 'claude-opus-4-8');
   assert.equal(opusWk.apportioned, true);
-  // 15,000 of the model's 506,000,000 tokens fall in the window, so its cost is
-  // scaled by exactly that share. This is an assumption about a steady token mix,
+  // 15,000 of the model's 3,000,000 *uncached* tokens fall in the window, so its
+  // cost is scaled by exactly that share. The denominator is input+output and not
+  // `total`, because that is what the numerator counts: `dailyModelTokens` records
+  // no cache traffic at all. This is still an assumption about a steady token mix,
   // which is why the flag above exists.
-  const share = 15_000 / opusAll.total;
+  const share = 15_000 / (opusAll.tokens.input + opusAll.tokens.output);
   assert.ok(Math.abs(opusWk.costUsd - opusAll.costUsd * share) < 1e-9);
-  // The split is scaled by the same factor, so input/output still add to `total`.
+  // The split is scaled by the same factor, so the four buckets still add to `total`.
   const sum = opusWk.tokens.input + opusWk.tokens.output + opusWk.tokens.cacheWrite + opusWk.tokens.cacheRead;
   assert.ok(Math.abs(sum - opusWk.total) <= 4, 'within rounding of the four buckets');
+});
+
+test('the apportionment denominator excludes cache, as its numerator does', () => {
+  // The regression this pins down: dividing the cache-*excluding* daily rows by the
+  // cache-*including* `m.total` shrinks every window by the cache-hit ratio. On the
+  // machine that surfaced it that was ~200x — a week whose transcripts said ~$2,500
+  // was reported as $10.77. The fixture reproduces the same shape: opus has
+  // 3,000,000 uncached tokens against a 506,000,000 total, so the wrong denominator
+  // reads ~169x low.
+  write(fixture());
+  const r = stats.report({ now: NOW });
+  const opusAll = r.models.find((m) => m.model === 'claude-opus-4-8');
+  const opusWk = r.windows.week.models.find((m) => m.model === 'claude-opus-4-8');
+
+  const wrong = opusAll.costUsd * (15_000 / opusAll.total);
+  assert.ok(opusWk.costUsd > wrong * 100, 'the old arithmetic was two orders of magnitude low');
+
+  // A window can never cost more than all time, which is the sanity bound the
+  // Math.min(1, ...) clamp protects when a model's rows outrun its uncached total.
+  assert.ok(opusWk.costUsd <= opusAll.costUsd + 1e-9);
+});
+
+test('a window that outruns its uncached total is clamped, not extrapolated', () => {
+  // A cache the CLI recomputed mid-window can hold daily rows summing above the
+  // model's recorded input+output. The share must cap at 1 rather than scaling the
+  // all-time cost *upwards* and reporting a week as more expensive than all time.
+  write(fixture({ dailyModelTokens: [{ date: '2026-07-26', tokensByModel: { 'claude-opus-4-8': 99_000_000 } }] }));
+  const r = stats.report({ now: NOW });
+  const opusAll = r.models.find((m) => m.model === 'claude-opus-4-8');
+  const opusWk = r.windows.week.models.find((m) => m.model === 'claude-opus-4-8');
+  assert.equal(opusWk.costUsd, opusAll.costUsd);
+  assert.equal(opusWk.total, opusAll.total);
+  assert.equal(opusWk.uncachedTokens, 99_000_000, 'while still reporting what was measured');
 });
 
 test('the cutoff is inclusive of today, matching the transcript analytics window', () => {
