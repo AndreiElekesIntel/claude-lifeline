@@ -13,7 +13,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node --test \"test/unit/*.test.js\"",
+    "test": "node scripts/test.mjs",
     "test:e2e": "playwright test",
     "test:all": "npm test && npm run test:e2e",
     "screenshots": "node scripts/screenshots.mjs",

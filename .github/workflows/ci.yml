@@ -20,9 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 22, not 20. `node --test` only learned to expand a glob pattern itself in
+      # 21, and package.json passes it one — bash expands it locally, so this
+      # failed only on the runner, with "Could not find test/unit/*.test.js".
+      # 20 is also now deprecated on GitHub's runners.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci

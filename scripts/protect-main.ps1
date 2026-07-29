@@ -101,6 +101,10 @@ $rules = @(
       require_code_owner_review         = $true
       require_last_push_approval        = $false
       required_review_thread_resolution = $true
+      # Stated here as well as in the repo settings below. The rule carries its
+      # own copy and defaults to all three methods, so leaving it out lets a
+      # merge commit onto main despite the repo being configured squash-only.
+      allowed_merge_methods             = @('squash')
     }
   }
 )
@@ -128,14 +132,34 @@ $ruleset = @{
 
 # Idempotent: replace an existing ruleset of the same name rather than stacking
 # a second copy of the same rules on top of it.
-$existing = (gh api "repos/$Repo/rulesets" --jq '.[] | select(.name == "Protect main") | .id') 2>$null
-$json = $ruleset | ConvertTo-Json -Depth 10
+#
+# The name is matched in PowerShell rather than with a --jq filter on purpose.
+# PowerShell 5.1 rewrites the argument before gh ever sees it: it strips the
+# inner double quotes from a filter like `select(.name == "Protect main")`, and
+# the space in the now-unquoted name splits one argument into two, so gh fails
+# with "accepts 1 arg(s), received 2". ConvertFrom-Json sidesteps the whole
+# quoting problem.
+$rulesetsJson = (gh api "repos/$Repo/rulesets" 2>$null | Out-String)
+$existing = $null
+if ($LASTEXITCODE -eq 0 -and $rulesetsJson.Trim()) {
+  $existing = ($rulesetsJson | ConvertFrom-Json | Where-Object { $_.name -eq $ruleset.name } | Select-Object -First 1).id
+}
 
-if ($existing) {
-  Note "Updating existing ruleset $existing."
-  $json | gh api -X PUT "repos/$Repo/rulesets/$existing" --input - | Out-Null
-} else {
-  $json | gh api -X POST "repos/$Repo/rulesets" --input - | Out-Null
+# Via a temp file rather than a pipe, for the same class of reason: piping to a
+# native command goes through PowerShell's output encoding, and writing the file
+# with Out-File would prepend a UTF-8 BOM that gh's JSON parser rejects.
+$body = Join-Path ([IO.Path]::GetTempPath()) "lifeline-ruleset-$PID.json"
+[IO.File]::WriteAllText($body, ($ruleset | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
+
+try {
+  if ($existing) {
+    Note "Updating existing ruleset $existing."
+    gh api -X PUT "repos/$Repo/rulesets/$existing" --input $body | Out-Null
+  } else {
+    gh api -X POST "repos/$Repo/rulesets" --input $body | Out-Null
+  }
+} finally {
+  Remove-Item $body -ErrorAction SilentlyContinue
 }
 
 if ($LASTEXITCODE -ne 0) { Bad 'GitHub rejected the ruleset. See the message above.'; exit 1 }
@@ -150,8 +174,19 @@ Ok 'Repository admin can still push directly'
 
 # Squash-only keeps the history on main readable: one commit per reviewed
 # change, rather than a contributor's work-in-progress commits.
-gh api -X PATCH "repos/$Repo" -F allow_squash_merge=true -F allow_merge_commit=false `
-  -F allow_rebase_merge=false -F delete_branch_on_merge=true -F allow_auto_merge=true | Out-Null
+$merge = Join-Path ([IO.Path]::GetTempPath()) "lifeline-merge-$PID.json"
+[IO.File]::WriteAllText($merge, (@{
+  allow_squash_merge     = $true
+  allow_merge_commit     = $false
+  allow_rebase_merge     = $false
+  delete_branch_on_merge = $true
+  allow_auto_merge       = $true
+} | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+try {
+  gh api -X PATCH "repos/$Repo" --input $merge | Out-Null
+} finally {
+  Remove-Item $merge -ErrorAction SilentlyContinue
+}
 if ($LASTEXITCODE -eq 0) { Ok 'Squash-only merges, branches deleted after merge' }
 
 Write-Host ''
