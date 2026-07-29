@@ -12,9 +12,14 @@ const fs = require('fs');
 const path = require('path');
 const { configFile, lifelineHome } = require('./paths');
 const { ERROR_CLASSES, POLICIES } = require('./policy');
+const { SCHEMA_VERSION, migrateConfig } = require('./migrate');
 
 const DEFAULTS = {
-  version: 1,
+  /**
+   * Schema version, owned by migrate.js. A config written by an older Lifeline is
+   * upgraded on load rather than replaced, so settings survive a v2 or v3.
+   */
+  version: SCHEMA_VERSION,
 
   /** Master switch. Off means the hook exits 0 and does nothing. */
   enabled: true,
@@ -33,8 +38,6 @@ const DEFAULTS = {
     stalledSessionDetection: true,
     /** Watch for CLI processes that vanished without ending cleanly. */
     deadSessionDetection: true,
-    /** Relaunch a dead session with --resume. Off by default: it starts processes. */
-    deadSessionRelaunch: false,
     /** Windows toast on every recovery. */
     desktopNotifications: true,
     /** Sound on recovery. */
@@ -66,8 +69,42 @@ const DEFAULTS = {
     showInTray: true,
   },
 
+  analytics: {
+    /** Read transcripts to report time, tokens, and estimated cost. */
+    enabled: true,
+    /**
+     * Per-model rate overrides, USD per million tokens, shaped like pricing.js's
+     * table. Editable because published prices change and subscription plans do
+     * not bill per token at all — a hardcoded table would drift with no recourse.
+     */
+    rates: {},
+    /** Currency symbol shown next to estimated cost. Display only. */
+    currencySymbol: '$',
+  },
+
   /** Per-error-class overrides on top of policy.js. */
   policies: {},
+
+  /**
+   * Hook installation into Claude Code's settings.json.
+   *
+   * On by default: Lifeline cannot recover anything without its hooks registered,
+   * so an app that sits there asking to be set up is an app that silently does
+   * nothing. The install is idempotent, backs up settings.json first, and merges
+   * rather than replaces (see installer.js).
+   */
+  hooks: {
+    /** Register missing hooks at startup instead of waiting to be asked. */
+    autoInstall: true,
+    /**
+     * Set when the user removes the hooks themselves.
+     *
+     * Without this, auto-install and a deliberate uninstall would fight each
+     * other on every launch. An explicit removal is a decision, and it outranks
+     * the default.
+     */
+    optedOut: false,
+  },
 
   advanced: {
     /** Keep this many events in events.jsonl. */
@@ -109,16 +146,36 @@ function defaultConfig() {
   return cfg;
 }
 
+/**
+ * Load config, upgrading an older file on the way in.
+ *
+ * The migration is applied to the parsed file *before* the defaults merge, so a
+ * step that renames a key sees the old name rather than a default that has
+ * already filled in the new one. Layering over the defaults afterwards means
+ * unknown keys — including ones a newer Lifeline wrote — are preserved instead of
+ * dropped, which is what makes a downgrade non-destructive.
+ *
+ * `loadConfig.lastMigration` records what happened, for the app to log once at
+ * startup. Deliberately not a callback or an event: this runs in the hook's hot
+ * path on every failure, and it must stay a synchronous read with no side effects
+ * beyond the one-off backup that migrateConfig takes.
+ */
 function loadConfig() {
   const file = configFile();
   try {
-    const raw = fs.readFileSync(file, 'utf8');
-    return deepMerge(defaultConfig(), JSON.parse(raw));
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const result = migrateConfig(raw);
+    loadConfig.lastMigration = result.migrated || result.newer ? result : null;
+    return deepMerge(defaultConfig(), result.config);
   } catch {
     // Missing or corrupt: defaults keep recovery working.
+    loadConfig.lastMigration = null;
     return defaultConfig();
   }
 }
+
+/** Set by the most recent loadConfig() call; null when nothing notable happened. */
+loadConfig.lastMigration = null;
 
 /** Atomic write — a crash mid-save must not leave a truncated config. */
 function saveConfig(cfg) {
