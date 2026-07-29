@@ -18,6 +18,11 @@
  * setup.ps1, so nothing ever created the key — hence doing it here, at startup,
  * where it is guaranteed to match the id the app actually posts under.
  *
+ * **Both halves are needed.** The registry key supplies the name; a Start Menu
+ * shortcut carrying the same id is what lets the notification platform attribute a
+ * toast to that name in the first place. With the key alone the toasts still read
+ * "com.aelekes.claudelifeline", which is why `stampStartMenuShortcut` exists.
+ *
  * ## Why HKCU, and why this is safe
  *
  * Per-user, so no elevation is needed and nothing outside this user's hive is
@@ -138,8 +143,87 @@ async function registerToastIdentity() {
   const named = await regAdd('DisplayName', DISPLAY_NAME);
   const icon = ensureIconFile();
   const iconSet = icon ? await regAdd('IconUri', icon) : false;
+  const stamped = await stampStartMenuShortcut();
 
-  return { ok: named, displayName: DISPLAY_NAME, icon: iconSet ? icon : null };
+  return { ok: named, displayName: DISPLAY_NAME, icon: iconSet ? icon : null, shortcut: stamped };
+}
+
+/**
+ * Put our AUMID on the Start Menu shortcut.
+ *
+ * The registry key above is necessary but, on its own, was not sufficient: the
+ * notification platform resolves a desktop app's display name by finding a Start
+ * Menu shortcut whose `System.AppUserModel.ID` matches the id the toast was posted
+ * under. Ours had none — `WScript.Shell`, which setup.ps1 uses, cannot set a
+ * property-store value at all — so Windows had no shortcut to attribute the toast to
+ * and kept printing the raw id even with DisplayName present.
+ *
+ * Done through PowerShell because setting it needs `IPropertyStore` on `IShellLink`,
+ * which has no plain command-line equivalent. That is a heavy way to write one
+ * property, so it runs only when the shortcut exists and is not already stamped —
+ * on every normal launch this reads one property and stops.
+ *
+ * Failure is silent by design, as everywhere else in this file: an unstamped
+ * shortcut means a badly-labelled toast, which is never worth a startup error.
+ */
+function stampStartMenuShortcut() {
+  const appData = process.env.APPDATA;
+  if (!appData) return Promise.resolve(false);
+  const lnk = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${DISPLAY_NAME}.lnk`);
+  if (!fs.existsSync(lnk)) return Promise.resolve(false);
+
+  // Single-quoted inside PowerShell, with any quote doubled: these values are ours,
+  // but building a script string around a path still deserves escaping.
+  const psLiteral = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  const script = `
+$ErrorActionPreference = 'Stop'
+$lnk = ${psLiteral(lnk)}
+$aumid = ${psLiteral(APP_USER_MODEL_ID)}
+$shell = New-Object -ComObject Shell.Application
+$item = $shell.Namespace([System.IO.Path]::GetDirectoryName($lnk)).ParseName([System.IO.Path]::GetFileName($lnk))
+if ($item.ExtendedProperty('System.AppUserModel.ID') -eq $aumid) { exit 0 }
+Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LifelineAumid {
+  [ComImport, Guid("00021401-0000-0000-C000-000000000046")] private class ShellLink {}
+  [ComImport, Guid("0000010b-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IPersistFile { void GetClassID(out Guid c); [PreserveSig] int IsDirty();
+    void Load([MarshalAs(UnmanagedType.LPWStr)] string f, uint m);
+    void Save([MarshalAs(UnmanagedType.LPWStr)] string f, [MarshalAs(UnmanagedType.Bool)] bool r);
+    void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string f);
+    void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string f); }
+  [StructLayout(LayoutKind.Sequential)] private struct PropertyKey { public Guid fmtid; public uint pid; }
+  [StructLayout(LayoutKind.Sequential)] private struct PropVariant { public ushort vt; ushort r1, r2, r3; public IntPtr p; IntPtr p2; }
+  [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IPropertyStore { void GetCount(out uint c); void GetAt(uint i, out PropertyKey k);
+    void GetValue(ref PropertyKey k, out PropVariant v); void SetValue(ref PropertyKey k, ref PropVariant v); void Commit(); }
+  [DllImport("ole32.dll")] private static extern int PropVariantClear(ref PropVariant pv);
+  public static void Set(string lnkPath, string aumid) {
+    var link = new ShellLink();
+    ((IPersistFile)link).Load(lnkPath, 2);
+    var store = (IPropertyStore)link;
+    // PKEY_AppUserModel_ID; vt 31 is VT_LPWSTR.
+    var key = new PropertyKey { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+    var pv = new PropVariant { vt = 31, p = Marshal.StringToCoTaskMemUni(aumid) };
+    store.SetValue(ref key, ref pv);
+    store.Commit();
+    ((IPersistFile)link).Save(lnkPath, true);
+    PropVariantClear(ref pv);
+  }
+}
+'@
+[LifelineAumid]::Set($lnk, $aumid)
+`;
+
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { windowsHide: true, timeout: 20_000 },
+      (err) => resolve(!err)
+    );
+  });
 }
 
 // skipReason is exported so the isolation guard can be tested without letting a

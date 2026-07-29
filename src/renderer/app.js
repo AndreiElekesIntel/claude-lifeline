@@ -1899,8 +1899,8 @@ const FEATURE_COPY = {
   stalledSessionDetection: ['Detect stalled sessions', 'Flag a session that says it is working but has not made progress for a long time.'],
   deadSessionDetection: ['Detect dead sessions', 'Notice when the Claude Code process disappeared mid-task.'],
   desktopNotifications: ['Desktop notifications', 'A Windows toast whenever a session is resumed or needs you.'],
-  promptCompleteNotifications: ['Tell me when a prompt finishes', 'A toast when a session stops working and is waiting for you — so you can go and do something else while it runs.'],
-  soundAlerts: ['Sound with notifications', 'Play the notification sound instead of showing it silently.'],
+  promptCompleteNotifications: ['Tell me when a prompt finishes', 'A toast with a sound the moment a turn ends, so you can go and do something else while it runs.'],
+  soundAlerts: ['Sound on failure notifications too', 'Failure toasts are silent by default. Completion toasts always play a sound, since that is the one you are waiting for.'],
   respectNonRetryable: ['Never retry hopeless failures', 'Keep auth, billing, and org-policy errors on alert-only, even if you switch them on in Coverage. Turning this off lets you force retries that cannot succeed.'],
 };
 

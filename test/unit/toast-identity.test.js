@@ -126,6 +126,22 @@ test('LIFELINE_HOME pointing at the real dir is not treated as a sandbox', async
   }
 });
 
+test('the shortcut stamp uses the same id as the registration', () => {
+  /**
+   * The registry key supplies the toast's name; a Start Menu shortcut carrying the
+   * same AUMID is what lets Windows attribute a toast to it. If the two ids ever
+   * disagree the app is back to showing the raw string, with nothing erroring —
+   * which is the exact bug this file exists to prevent, one level further out.
+   *
+   * Checked as source text because calling the stamper would rewrite a real shortcut.
+   */
+  const src = read('src/main/toast-identity.js');
+  assert.match(src, /psLiteral\(APP_USER_MODEL_ID\)/);
+  assert.ok(!/psLiteral\('com\./.test(src), 'the stamped id should not be a literal');
+  // PKEY_AppUserModel_ID: the wrong property silently stamps nothing useful.
+  assert.match(src, /9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3/i);
+});
+
 test('the e2e fixture sets the flag that suppresses registration', () => {
   // The guard above is only load-bearing if every e2e launch actually carries the
   // flag. If the fixture stops setting it, the escape is back and silent.

@@ -57,14 +57,27 @@ The four `limits` that matter for runaway protection are explained on [Safety](S
 
 `desktopNotifications` covers the things that went **wrong** — a session was resumed, a failure needs you, a limit was hit. On by default: those are rare and each one is worth an interruption.
 
-`promptCompleteNotifications` is the other kind — a toast when a session stops working and is waiting for you, so you can go and do something else while a long run finishes. It is **off by default and deliberately a separate switch**, because it fires on every completed prompt: across several concurrent sessions that is a different volume of noise, and an upgrade that silently turned it on would make the app interrupt far more than it did before.
+`promptCompleteNotifications` is the other kind — a toast, with a sound, the moment a turn ends and a session is waiting for you, so you can go and do something else while a long run finishes. It is **off by default and deliberately a separate switch**, because it fires on every completed prompt: across several concurrent sessions that is a different volume of noise, and an upgrade that silently turned it on would make the app interrupt far more than it did before.
 
-It needs no extra hook. A finished prompt is a `busy` → `idle` transition in the session records Claude Code already writes, and the app watches for that edge on its normal poll — so the detection cannot slow down or interfere with a running session. Two consequences worth knowing:
+The trigger is Claude Code's **`Stop` hook** — the same instant the CLI prints its `✻ Baked for 42s` line. The hook writes one small line to `last-completion.json`, the app watches that file, and the toast appears immediately.
 
-- Sessions already idle when the app starts are **not** announced. On the first poll a session that finished hours ago is indistinguishable from one that finished a second ago, and greeting you with a screenful of stale toasts is worse than saying nothing.
-- A session whose process **vanished** is not reported as finished. That is a crash, it stops being busy too, and `deadSessionDetection` is what has something accurate to say about it.
+That is a change from how this first worked. The original version inferred "finished" from a `busy` → `idle` change in the session records on the app's five-second poll, which was wrong twice over: it could arrive up to five seconds late, by which time you had already looked back at the terminal; and a session stops being `busy` for reasons that are not "your work is done" — a turn pausing on a background task, for one — so some toasts announced a pause as a completion. The hook is handed the background-task list, so it can tell the difference.
 
-The toast title comes from a per-user registry entry (`HKCU\Software\Classes\AppUserModelId\com.aelekes.claudelifeline`) that the app writes at startup. Windows reads the app name shown on a toast from there rather than from the executable, so without it every notification is labelled with the raw id instead of "Claude Lifeline".
+Writing the signal costs about 0.09 ms, so nothing measurable is added to Claude Code's critical path, and a failure there is swallowed — a missed toast never disturbs a session.
+
+Two consequences worth knowing:
+
+- A completion recorded **more than a minute ago is not announced**, so restarting the app does not toast about whatever finished last. Same reasoning as before: at startup, old and new are indistinguishable, and saying nothing is the honest choice.
+- A turn that ended **with background work still running** is not reported as finished — that is a pause, and Lifeline is about to resume it. A session whose process *vanished* is a crash, which is what `deadSessionDetection` covers.
+
+Completion toasts always play a sound; `soundAlerts` governs the *failure* toasts, which are the ones worth keeping quiet.
+
+The toast title takes **two** things, and the app sets up both at startup:
+
+1. A per-user registry entry (`HKCU\Software\Classes\AppUserModelId\com.aelekes.claudelifeline`) holding `DisplayName` and `IconUri`. Windows reads the name shown on a toast from here, not from the executable.
+2. The same id stamped onto the Start Menu shortcut as `System.AppUserModel.ID`. This is the part that is easy to miss: the notification platform attributes a desktop app's toast by finding a shortcut carrying that id, so with the registry key alone the notifications still read `com.aelekes.claudelifeline`. `WScript.Shell` — which `setup.ps1` uses to write shortcuts — cannot set a property-store value at all, so the app does it itself.
+
+Windows also caches what it has already displayed, so toasts posted before both were in place keep their old label until the next one arrives.
 
 That entry is the one thing a sandboxed run cannot be isolated from — `LIFELINE_HOME` redirects every file Lifeline writes, but the registry is per-user and machine-wide. So an app launched with `LIFELINE_E2E=1`, or against a `LIFELINE_HOME` that is not the real data directory, **does not register at all**: it would otherwise overwrite the real installation's entry with an icon path inside a scratch directory that is deleted when the run ends.
 

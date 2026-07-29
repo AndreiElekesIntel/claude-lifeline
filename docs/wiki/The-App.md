@@ -78,9 +78,11 @@ Below that, the per-failure policy table — wait, attempt cap, and strategy for
 
 The first is about failures: a session was resumed, or something needs you. On by default — rare, and each one worth an interruption.
 
-The second, **"Tell me when a prompt finishes"**, toasts when a session stops working and is waiting for you, so a long run does not need watching. It is off until you ask for it: it fires on *every* completed prompt, which across several sessions is a different amount of noise entirely.
+The second, **"Tell me when a prompt finishes"**, toasts with a sound the moment a turn ends and a session is waiting for you, so a long run does not need watching. It is off until you ask for it: it fires on *every* completed prompt, which across several sessions is a different amount of noise entirely.
 
-Two things it deliberately does not do. Sessions that were already idle when the app started are not announced — on the first look, a prompt that finished overnight is indistinguishable from one that finished a second ago. And a session whose process *vanished* is not called finished; that is a crash, and dead-session detection is what has something true to say about it.
+It is driven by Claude Code's `Stop` hook, so it lands at the same instant the CLI prints its `✻ Baked for 42s` line rather than on the app's next poll.
+
+Two things it deliberately does not do. A completion older than a minute is never announced, so restarting the app does not greet you with whatever finished last. And a turn that ended with background work still running is not called finished — that is a pause Lifeline is about to resume, not a result.
 
 See [Configuration → Notifications](Configuration#notifications) for how the detection works and why it needs no extra hook.
 

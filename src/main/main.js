@@ -33,6 +33,7 @@ const sessionRename = require('../shared/session-rename');
 const history = require('../shared/history');
 const widgets = require('../shared/widgets');
 const completion = require('../shared/completion');
+const completionSignal = require('../shared/completion-signal');
 const widgetWindows = require('./widget-windows');
 
 const isDev = process.argv.includes('--dev');
@@ -74,11 +75,11 @@ let analytics = null;
 let quitting = false;
 let lastNotifiedAt = 0;
 /**
- * Each session's status as of the previous poll, for spotting the busy → idle edge
- * that means a prompt finished. Owned here rather than in the monitor because it is
- * notification state: what the user has already been told about.
+ * The last completion already announced, so one write cannot become three toasts —
+ * fs.watch raises multiple events for a single write on Windows.
  */
-let lastSessionStatus = new Map();
+let lastCompletionAt = 0;
+let completionWatcher = null;
 
 /** Single instance: a second tray icon would double every notification. */
 if (!app.requestSingleInstanceLock()) {
@@ -428,29 +429,60 @@ function notifyRecovery(state) {
 }
 
 /**
- * Toast when a session finishes working.
+ * Toast when a session finishes a turn.
  *
- * The transition is detected against the previous poll (see completion.js), so this
- * fires once per finished prompt rather than continuously while a session sits idle.
- * The state map is updated even when the feature is off — otherwise switching it on
- * mid-session would treat every already-idle session as having just finished, and
- * announce a screenful of stale prompts.
+ * Driven by the `Stop` hook through a signal file rather than by this poll — the
+ * hook fires at the instant the CLI prints its "Baked for 42s" line, where the poll
+ * was up to five seconds late and could not tell "finished" from "ended to wait on a
+ * background task". See completion-signal.js.
+ *
+ * The watcher is what makes it immediate: fs.watch fires on the write, so nothing
+ * waits for the next tick. `lastCompletionAt` is the dedupe — Windows raises several
+ * change events for one write, and each would otherwise be its own toast.
  */
-function notifyCompletions(state) {
-  const { completed, next } = completion.findCompleted(state.sessions, lastSessionStatus);
-  lastSessionStatus = next;
-
-  const cfg = state.config;
+function announceCompletion() {
+  const cfg = loadConfig();
   if (!cfg.features.promptCompleteNotifications || !Notification.isSupported()) return;
 
-  for (const session of completed) {
-    const label = completion.sessionLabel(session);
-    new Notification({
-      title: 'Claude Lifeline — Session finished',
-      body: `${label} has finished working and is waiting for you.`,
-      silent: !cfg.features.soundAlerts,
-      icon: nativeImage.createFromBuffer(drawIcon(64, 'running')),
-    }).show();
+  const rec = completionSignal.read();
+  if (!completionSignal.isFresh(rec, { lastAt: lastCompletionAt })) return;
+  lastCompletionAt = rec.at;
+
+  const label = completion.sessionLabel(rec);
+  const toast = new Notification({
+    title: 'Claude Lifeline — Session finished',
+    body: `${label} has finished working and is waiting for you.`,
+    // A completion is the one notification you are actively waiting for, so it is
+    // audible by default rather than following soundAlerts. That switch stays in
+    // charge of the *failure* toasts, which are the noisy ones to make loud.
+    silent: false,
+    icon: nativeImage.createFromBuffer(drawIcon(64, 'running')),
+  });
+  // Clicking it goes where you were going anyway.
+  toast.on('click', () => showWindow('sessions'));
+  toast.show();
+}
+
+/**
+ * Watch for the hook's completion signal.
+ *
+ * Watches the *directory* rather than the file: the file may not exist yet on a
+ * fresh install, and a watch on a missing path throws — while a watch on a file
+ * that is later replaced rather than appended can stop firing altogether. The data
+ * dir is guaranteed to exist by the time the app is ready.
+ */
+function watchCompletions() {
+  try {
+    const dir = paths.lifelineHome();
+    fs.mkdirSync(dir, { recursive: true });
+    const target = path.basename(paths.completionSignalFile());
+    completionWatcher = fs.watch(dir, (_event, filename) => {
+      if (filename && filename !== target) return;
+      announceCompletion();
+    });
+  } catch {
+    // No watcher means no completion toasts; everything else still works, and
+    // failing startup over a notification would be the wrong trade.
   }
 }
 
@@ -467,6 +499,7 @@ app.whenReady().then(() => {
     registerToastIdentity();
   }
 
+  watchCompletions();
   monitor = new Monitor({ pollMs: 5_000 }).start();
   analytics = new AnalyticsService({ loadConfig });
   createWindow();
@@ -486,7 +519,8 @@ app.whenReady().then(() => {
       if (widgetWindows.isOpen(id)) widgetWindows.send(id, 'widget-state', widgetState(id));
     }
     notifyRecovery(state);
-    notifyCompletions(state);
+    // Completion toasts are not driven from here: they come from the hook via
+    // fs.watch, so they land the moment the turn ends instead of on the next tick.
   });
 
   const cfg = loadConfig();
@@ -611,6 +645,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   quitting = true;
   if (monitor) monitor.stop();
+  if (completionWatcher) {
+    completionWatcher.close();
+    completionWatcher = null;
+  }
   /**
    * Widgets close with the app.
    *
