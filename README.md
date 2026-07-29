@@ -10,7 +10,7 @@ It hooks into Claude Code's own failure event, waits for the appropriate backoff
   <a href="https://github.com/AndreiElekesIntel/claude-lifeline/releases/latest"><img alt="Download" src="https://img.shields.io/badge/Download-Windows%20installer-5b5bd6?style=flat-square"></a>
   <img alt="Platform" src="https://img.shields.io/badge/Windows%2010%20%2F%2011-x64%20%C2%B7%20arm64-2f2f3a?style=flat-square">
   <img alt="Dependencies" src="https://img.shields.io/badge/runtime%20deps-0-3f9a5c?style=flat-square">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-279%20unit%20%C2%B7%20109%20e2e-3f9a5c?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-296%20unit%20%C2%B7%20111%20e2e-3f9a5c?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2f2f3a?style=flat-square">
 </p>
 

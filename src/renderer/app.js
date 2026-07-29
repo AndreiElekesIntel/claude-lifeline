@@ -1899,6 +1899,7 @@ const FEATURE_COPY = {
   stalledSessionDetection: ['Detect stalled sessions', 'Flag a session that says it is working but has not made progress for a long time.'],
   deadSessionDetection: ['Detect dead sessions', 'Notice when the Claude Code process disappeared mid-task.'],
   desktopNotifications: ['Desktop notifications', 'A Windows toast whenever a session is resumed or needs you.'],
+  promptCompleteNotifications: ['Tell me when a prompt finishes', 'A toast when a session stops working and is waiting for you — so you can go and do something else while it runs.'],
   soundAlerts: ['Sound with notifications', 'Play the notification sound instead of showing it silently.'],
   respectNonRetryable: ['Never retry hopeless failures', 'Keep auth, billing, and org-policy errors on alert-only, even if you switch them on in Coverage. Turning this off lets you force retries that cannot succeed.'],
 };
@@ -1912,7 +1913,7 @@ const LIMIT_COPY = {
   stalledAfterMs: ['Stalled after (ms)', 'Idle time before a working session counts as stalled.', 60000, 21600000],
 };
 
-const NOTIFY_KEYS = ['desktopNotifications', 'soundAlerts'];
+const NOTIFY_KEYS = ['desktopNotifications', 'promptCompleteNotifications', 'soundAlerts'];
 
 const ADVANCED_COPY = {
   debugLogging: ['Verbose hook logging', 'Write every hook decision to hook.log. Useful when diagnosing why a session was not resumed.'],

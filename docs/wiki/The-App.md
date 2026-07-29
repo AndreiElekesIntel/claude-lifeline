@@ -72,6 +72,18 @@ Below that, the per-failure policy table — wait, attempt cap, and strategy for
 
 ![Per-failure policy](https://raw.githubusercontent.com/AndreiElekesIntel/claude-lifeline/main/docs/screenshots/policies-dark.png)
 
+### Telling you when a prompt is done
+
+**Notifications** holds two independent switches, because they answer different questions.
+
+The first is about failures: a session was resumed, or something needs you. On by default — rare, and each one worth an interruption.
+
+The second, **"Tell me when a prompt finishes"**, toasts when a session stops working and is waiting for you, so a long run does not need watching. It is off until you ask for it: it fires on *every* completed prompt, which across several sessions is a different amount of noise entirely.
+
+Two things it deliberately does not do. Sessions that were already idle when the app started are not announced — on the first look, a prompt that finished overnight is indistinguishable from one that finished a second ago. And a session whose process *vanished* is not called finished; that is a crash, and dead-session detection is what has something true to say about it.
+
+See [Configuration → Notifications](Configuration#notifications) for how the detection works and why it needs no extra hook.
+
 ## About
 
 A doctor's-eye view of the install — what is registered, how many checks are armed, and how many recoveries have actually happened:
