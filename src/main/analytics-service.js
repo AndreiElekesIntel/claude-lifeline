@@ -79,6 +79,20 @@ class AnalyticsService {
     return this.snapshot();
   }
 
+  /**
+   * Mark the cached report as out of date, without scanning.
+   *
+   * For when something *else* changed a transcript — a rename appends a
+   * `custom-title` record, and the title the History tab shows comes from this
+   * report. The per-file disk cache needs no help, since it is keyed on (size,
+   * mtime) and an append changes both; what has to be cleared is the in-memory
+   * freshness window, which would otherwise keep serving the old title for up to
+   * MIN_AGE_MS and make the rename look like it silently failed.
+   */
+  stale() {
+    this.lastAt = 0;
+  }
+
   /** Whatever is already known, with no scan. Used by the state poll. */
   snapshot() {
     return {
@@ -104,7 +118,21 @@ class AnalyticsService {
     this.pending = new Promise((resolve, reject) => {
       let settled = false;
       const worker = new Worker(path.join(__dirname, 'analytics-worker.js'), {
-        workerData: { now: Date.now(), pricingOverrides, sessionLimit: 60 },
+        /**
+         * 400 sessions, not 60.
+         *
+         * 60 was sized for the Analytics tab's "recent sessions" list, which shows
+         * a handful. History groups the same array into days, so the limit decides
+         * how far back the tab can see — and 60 sessions is under a fortnight for
+         * anyone running several a day, which makes a page titled "History" quietly
+         * stop at the point it gets interesting.
+         *
+         * The cost is IPC payload size, not scan time: every transcript is read
+         * either way to compute the totals, and this only chooses how many of the
+         * results are carried to the renderer. At roughly 400 bytes a row that is
+         * well under a megabyte.
+         */
+        workerData: { now: Date.now(), pricingOverrides, sessionLimit: 400 },
       });
 
       const finish = (fn, arg) => {

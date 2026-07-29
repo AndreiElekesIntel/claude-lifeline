@@ -447,12 +447,18 @@ test('resetting settings restores every default', async () => {
   expect(cfg.features.soundAlerts).toBe(false);
 });
 
-test('navigation reaches all five tabs and the about tab lists real paths', async () => {
+test('navigation reaches every tab and the about tab lists real paths', async () => {
   const sandbox = fx.makeSandbox('nav');
   ctx = await fx.launch(sandbox);
   const { page } = ctx;
 
-  for (const tab of ['sessions', 'activity', 'settings', 'about', 'dashboard']) {
+  // Read off the sidebar rather than hard-coded, so adding a tab without wiring
+  // its section — the exact bug History and Launchpad shipped with first — fails
+  // here instead of being invisible until someone clicks it.
+  const tabs = await page.locator('.nav-item').evaluateAll((els) => els.map((el) => el.dataset.tab));
+  expect(tabs).toEqual(['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about']);
+
+  for (const tab of tabs) {
     await page.click(`.nav-item[data-tab="${tab}"]`);
     await expect(page.locator(`.tab[data-tab="${tab}"]`)).toBeVisible();
     await expect(page.locator(`.nav-item[data-tab="${tab}"]`)).toHaveClass(/active/);
@@ -1003,9 +1009,18 @@ test('settings are grouped, and the jump list scrolls to each group', async () =
   const { page } = ctx;
   await page.click('.nav-item[data-tab="settings"]');
 
-  // One entry per group: the page was previously one long undifferentiated list.
+  /**
+   * One entry per group — counted from the page rather than hardcoded.
+   *
+   * The point of the assertion is that the jump list and the groups stay in step; a
+   * literal count only tested that, and failed whenever a group was added (which is
+   * how the Desktop widgets group broke it). Comparing the two counts keeps the real
+   * invariant and needs no edit next time.
+   */
   const items = page.locator('#settingsNav .settings-nav-item');
-  await expect(items).toHaveCount(8);
+  // Scoped to the settings tab: `.settings-group` is also used on Coverage and
+  // About, so an unscoped count would be a much larger number that means nothing.
+  await expect(items).toHaveCount(await page.locator('.tab[data-tab="settings"] .settings-group').count());
   await expect(items.first()).toHaveText('Installation');
 
   await items.filter({ hasText: 'Analytics & cost' }).click();

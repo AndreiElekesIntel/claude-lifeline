@@ -1,0 +1,870 @@
+/* =========================================================================
+   Claude Lifeline — desktop widgets
+
+   Its own stylesheet rather than a reuse of styles.css, and the reason is not
+   size: a widget has different constraints from a window. It has no frame, so it
+   draws its own; it sits on the user's wallpaper rather than on a known
+   background, so it needs a border and a shadow to separate from *anything*; and
+   it is small enough that the main window's 14px/1.55 rhythm makes four presets
+   fill a screen corner.
+
+   Six themes rather than the main window's two, for the same reason. What reads
+   against an app's own dark shell is a settled question; what reads against
+   somebody's photograph of a mountain is not, so the choice is theirs.
+   ========================================================================= */
+
+:root {
+  --accent: #7c5cff;
+  --accent-soft: #7c5cff26;
+  --accent-border: #7c5cff55;
+  --accent-text: #b9a8ff;
+
+  --panel: #151823f2;
+  --panel-2: #1b1f2c;
+  --hover: #222738cc;
+  --border: #ffffff1f;
+  --text: #eef1f8;
+  --text-dim: #a6adc0;
+  --text-faint: #7f8799;
+
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  /**
+   * Room around the panel for its shadow.
+   *
+   * A box-shadow takes no layout space, so a panel filling the window has its
+   * shadow clipped at the window edge — which reads as a hard cut rather than a
+   * soft one, and is most of what makes a floating widget look flat. The gutter is
+   * part of the reported height, and small because it is transparent but still
+   * catches clicks.
+   */
+  --gutter: 8px;
+  /* Heavier than the main window's. A widget floats above other windows with
+     nothing behind it, so the shadow is the only thing establishing that it is
+     in front rather than pasted onto the wallpaper. */
+  --shadow: 0 10px 34px #00000073;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --font: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+/* ---- themes ---------------------------------------------------------------
+   `system` resolves to dark or light in the renderer, so it never appears here.
+   The four named themes are opinions about a background, not brightness steps:
+   midnight is near-opaque for a busy wallpaper, slate is neutral grey for a
+   photograph, glass is barely there for a plain one. */
+
+[data-theme="light"] {
+  --panel: #fffffff2;
+  --panel-2: #f0f2f8;
+  --hover: #e8ebf4cc;
+  --border: #1a213b1f;
+  --text: #12151f;
+  --text-dim: #555d72;
+  --text-faint: #838b9f;
+  --accent-text: #5b3ee0;
+  /* Status hues darkened to stay legible as small text on white — the same
+     measured values the main window uses. */
+  --ok: #08663f;
+  --warn: #8a3f06;
+  --danger: #a81d29;
+  --info: #1a56ad;
+  --shadow: 0 10px 34px #1a213b2e;
+}
+
+[data-theme="midnight"] {
+  /* Nearly opaque, and darker than dark. For a wallpaper with detail in it,
+     where a translucent panel turns text into noise. */
+  --panel: #080a12fa;
+  --panel-2: #10131d;
+  --hover: #1a1e2b;
+  --border: #ffffff17;
+  --text: #e8ecf7;
+  --text-dim: #98a0b5;
+}
+
+[data-theme="slate"] {
+  --panel: #2a2f3bf2;
+  --panel-2: #333947;
+  --hover: #3d4453;
+  --border: #ffffff24;
+  --text: #f2f4fa;
+  --text-dim: #b3bacb;
+}
+
+[data-theme="glass"] {
+  /* The most translucent, leaning on the blur. Text is pushed brighter and gains
+     a shadow, because the surface underneath is unknown and might be pale. */
+  --panel: #12161f8c;
+  --panel-2: #1b1f2ca6;
+  --hover: #2227384d;
+  --border: #ffffff2e;
+  --text: #ffffff;
+  --text-dim: #dfe4f0;
+}
+
+[data-theme="glass"] .grip-title,
+[data-theme="glass"] .status-line,
+[data-theme="glass"] .chip-label { text-shadow: 0 1px 3px #000000a6; }
+
+[data-accent="blue"] { --accent: #3b82f6; --accent-soft: #3b82f626; --accent-border: #3b82f655; --accent-text: #93c5fd; }
+[data-accent="emerald"] { --accent: #10b981; --accent-soft: #10b98126; --accent-border: #10b98155; --accent-text: #6ee7b7; }
+[data-accent="amber"] { --accent: #f59e0b; --accent-soft: #f59e0b26; --accent-border: #f59e0b55; --accent-text: #fcd34d; }
+[data-theme="light"][data-accent="blue"] { --accent-text: #1d4ed8; }
+[data-theme="light"][data-accent="emerald"] { --accent-text: #047857; }
+[data-theme="light"][data-accent="amber"] { --accent-text: #b45309; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  /* The window is transparent and the panel draws the visible shape, so the
+     document itself must contribute no background at all — any colour here would
+     appear as a hard rectangle behind the rounded corners. */
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  /* Nothing in a widget is selectable text: a drag that starts on a label should
+     move the window, not highlight a word. */
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+/* Height is measured and reported to main, so the document must be exactly as
+   tall as its content — not the window. */
+html, body { height: auto; }
+
+.panel {
+  position: relative;
+  margin: var(--gutter);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(140%);
+  overflow: hidden;
+}
+
+/**
+ * A lit top edge, in the accent.
+ *
+ * One pseudo-element and it is most of what makes the panel look like a designed
+ * object rather than a box with a border: a real hairline of colour along the top,
+ * fading out at both ends, reads as light catching an edge. Behind everything and
+ * pointer-transparent, so it cannot interfere with the drag region underneath it.
+ */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/**
+ * And a wash of accent colour bleeding down from that edge.
+ *
+ * Very faint — 10% at the top and gone by a third of the way down. The point is
+ * that the panel is not one flat fill, which is what made the first version read as
+ * boring however good the type was.
+ */
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, var(--accent-soft), transparent 38%);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* Everything real sits above the wash. */
+.grip, .body, .orb, .settings { position: relative; z-index: 1; }
+
+.hidden { display: none !important; }
+
+/* ---- the drag handle ---------------------------------------------------- */
+
+.grip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px 7px 11px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #ffffff0a, transparent);
+  /* The whole header moves the window. Handing the drag to the compositor is
+     what makes it keep up with the cursor — a mousemove handler would be an IPC
+     round trip per frame. */
+  -webkit-app-region: drag;
+}
+
+[data-theme="light"] .grip { background: linear-gradient(180deg, #00000008, transparent); }
+
+/**
+ * The mark in the header.
+ *
+ * Small, and it replaces the dot on the card — the logo is drawn in the status
+ * colour, so it says everything the dot said and also says which app this is. The
+ * dot stays in the markup and comes back on the bar, where 18px of ring at the far
+ * left is less legible than a plain disc.
+ */
+.grip-logo {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: block;
+  /* A soft halo in the icon's own colour, so a violet ring on a violet-tinted panel
+     still separates from it. */
+  filter: drop-shadow(0 0 5px var(--accent-soft));
+}
+
+.grip-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.grip-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* Carved out of the drag region: a button inside one is not clickable. */
+  -webkit-app-region: no-drag;
+  /* Revealed on hover so the resting widget is just its content, but always
+     visible to the keyboard — a control that only exists on hover cannot be
+     tabbed to if it is display:none. */
+  opacity: 0;
+  transition: opacity 0.15s var(--ease);
+}
+
+.panel:hover .grip-actions,
+.grip-actions:focus-within { opacity: 1; }
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  color: var(--text-dim);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.icon-btn:hover { color: var(--text); background: var(--hover); }
+.icon-btn.close:hover { color: #fff; background: var(--danger); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon-btn svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.icon-btn[data-on="true"] { color: var(--accent-text); background: var(--accent-soft); }
+
+/* The status dot in the handle. Doubles as the whole readout in compact mode. */
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--text-faint);
+}
+
+.dot[data-status="running"] { background: var(--accent); animation: pulse 2s infinite; }
+.dot[data-status="waiting"] { background: var(--info); }
+.dot[data-status="attention"] { background: var(--warn); }
+.dot[data-status="error"] { background: var(--danger); }
+.dot[data-status="paused"] { background: var(--text-faint); }
+/* Before the first state push, and if main ever stops answering. */
+.dot[data-status="unknown"] { background: var(--text-faint); opacity: 0.5; }
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 var(--accent-border); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot[data-status="running"] { animation: none; }
+  * { transition: none !important; }
+}
+
+.body { padding: 9px; }
+
+.hint {
+  margin: 0;
+  padding: 2px 2px 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.hint.tight { padding-top: 5px; }
+.hint:empty { display: none; }
+
+/* ---- shortcuts --------------------------------------------------------- */
+
+.chips { display: flex; flex-direction: column; gap: 5px; }
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease), transform 0.06s var(--ease);
+}
+
+.chip:hover { background: var(--hover); border-color: var(--accent-border); }
+/* A pressed-in nudge, because a launch opens a terminal that takes a moment to
+   appear — without it the click looks like it did nothing. */
+.chip:active { transform: translateY(1px); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip[data-busy="true"] { border-color: var(--accent); background: var(--accent-soft); }
+
+.chip-key {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+}
+
+.chip-text { flex: 1; min-width: 0; }
+
+.chip-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chip-sub {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---- status: the hero ---------------------------------------------------
+   The mark at 34px with the state beside it. The largest element on the panel is
+   the logo, drawn in the status colour — so the thing that identifies the app and
+   the thing that reports its health are one object, and both are readable from
+   across a desk. */
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 2px 10px;
+}
+
+.hero-mark {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+}
+
+.hero-logo {
+  width: 34px;
+  height: 34px;
+  display: block;
+  filter: drop-shadow(0 2px 8px var(--accent-soft));
+}
+
+/**
+ * A ring that breathes outwards while sessions are live.
+ *
+ * Motion is what separates "this is a live readout" from "this is a screenshot of
+ * one", and it is the cheapest character the widget can have. Only while running:
+ * an idle widget that pulses forever is a widget people turn off. Under
+ * prefers-reduced-motion it stops but the ring stays, so nothing disappears.
+ */
+.hero-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 99px;
+  border: 1px solid var(--accent-border);
+  opacity: 0;
+}
+
+body[data-status="running"] .hero-ring { animation: halo 2.6s var(--ease) infinite; }
+body[data-status="attention"] .hero-ring { opacity: 0.9; border-color: var(--warn); }
+body[data-status="error"] .hero-ring { opacity: 0.9; border-color: var(--danger); }
+
+@keyframes halo {
+  0% { opacity: 0.85; transform: scale(0.86); }
+  70% { opacity: 0; transform: scale(1.28); }
+  100% { opacity: 0; transform: scale(1.28); }
+}
+
+.hero-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.hero-status {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hero-sub {
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---- status ------------------------------------------------------------ */
+
+.status-line {
+  margin: 0 0 7px;
+  padding: 0 2px;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+/* The card has the hero, which says the same thing better. The bar does not. */
+body[data-look="card"] .status-line { display: none; }
+body[data-look="bar"] .hero { display: none; }
+
+.counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.count {
+  position: relative;
+  padding: 7px 4px 6px;
+  text-align: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+/**
+ * A tone-coloured cap on each tile.
+ *
+ * Two pixels of colour is enough to make three identical tiles read as three
+ * different things at a glance, which a caption underneath does not do. Coloured
+ * from the tile's own tone, so the amber one is the one that is wrong.
+ */
+.count::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--tone, var(--text-faint));
+  opacity: 0.75;
+}
+
+.count[data-tone="ok"] { --tone: var(--ok); }
+.count[data-tone="warn"] { --tone: var(--warn); }
+.count[data-tone="danger"] { --tone: var(--danger); }
+.count[data-tone="accent"] { --tone: var(--accent); }
+/* A zero is not news, and neither is its cap. */
+.count[data-zero="true"]::before { opacity: 0.22; }
+
+.count-value {
+  font-size: 16px;
+  font-weight: 680;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.count-label { font-size: 9.5px; letter-spacing: 0.03em; color: var(--text-faint); text-transform: uppercase; }
+.count[data-tone="ok"] .count-value { color: var(--ok); }
+.count[data-tone="warn"] .count-value { color: var(--warn); }
+.count[data-tone="danger"] .count-value { color: var(--danger); }
+.count[data-tone="accent"] .count-value { color: var(--accent-text); }
+/* A zero is not news. Dimmed so the eye goes to the number that is not zero. */
+.count[data-zero="true"] .count-value { color: var(--text-faint); }
+
+.alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.alert {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-family: inherit;
+}
+
+.alert:hover { background: var(--hover); }
+.alert:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.alert[data-tone="danger"] { border-left-color: var(--danger); }
+.alert[data-tone="warn"] { border-left-color: var(--warn); }
+.alert[data-tone="info"] { border-left-color: var(--info); }
+.alert-text { flex: 1; min-width: 0; }
+.alert-when { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* Two lines maximum. An event detail can be a paragraph of API error text, and a
+   widget that grows to fit one is a widget that covers the screen. */
+.alert-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---- compact ------------------------------------------------------------
+   Not a smaller font: fewer things. Compact drops the sub-labels, the count
+   captions, and the alert list, leaving what a glance needs. */
+
+body[data-compact="true"] { font-size: 12px; }
+body[data-compact="true"] .body { padding: 7px; }
+body[data-compact="true"] .chip { padding: 5px 8px; }
+body[data-compact="true"] .chip-sub { display: none; }
+body[data-compact="true"] .count { padding: 4px 3px; }
+body[data-compact="true"] .count-label { display: none; }
+body[data-compact="true"] .status-line { margin-bottom: 5px; font-size: 12px; }
+body[data-compact="true"] .alerts { display: none; }
+body[data-compact="true"] .hint { display: none; }
+/* Except the click-through hint, which is the way out of a state the user
+   cannot click their way out of. */
+body[data-compact="true"] #clickThroughHint:not(.hidden) { display: block; }
+
+/* ---- the orb ------------------------------------------------------------
+   The whole widget: a disc with the mark in it and one number. Not a shrunken
+   card — a different amount of information, for someone who wants to know it is
+   alive and does not want a dashboard on their wallpaper. */
+
+.orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  /* The panel's own radius would leave a rounded square. */
+  border-radius: 99px;
+  /* The drag region is the whole disc, because an orb has no header to grab. The
+     buttons carve themselves back out — see .orb-actions below. */
+  -webkit-app-region: drag;
+}
+
+.orb-logo {
+  width: 54%;
+  height: 54%;
+  display: block;
+  filter: drop-shadow(0 2px 10px var(--accent-soft));
+}
+
+/**
+ * The number, on the rim.
+ *
+ * Bottom-right rather than centred under the logo, because centring it inside a
+ * 92px disc leaves both the mark and the digit too small to read. On the rim it can
+ * be full size, and it reads as a badge — which is what it is.
+ */
+.orb-value {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  min-width: 19px;
+  padding: 0 5px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 19px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+  background: var(--panel-2);
+  border: 1px solid var(--accent-border);
+  border-radius: 99px;
+}
+
+.orb-value[data-tone="warn"] { color: var(--warn); border-color: var(--warn); }
+.orb-value[data-tone="danger"] { color: var(--danger); border-color: var(--danger); }
+/* Nothing happening: still visible, but it does not ask for attention. */
+.orb-value[data-zero="true"] { color: var(--text-faint); border-color: var(--border); }
+
+/* The same breathing ring as the hero, at the orb's scale. */
+.orb-ring {
+  position: absolute;
+  inset: 3px;
+  border-radius: 99px;
+  border: 1px solid var(--accent-border);
+  opacity: 0;
+  pointer-events: none;
+}
+
+body[data-look="orb"][data-status="running"] .orb-ring { animation: halo 2.6s var(--ease) infinite; }
+body[data-look="orb"][data-status="attention"] .orb-ring { opacity: 0.9; border-color: var(--warn); }
+body[data-look="orb"][data-status="error"] .orb-ring { opacity: 0.9; border-color: var(--danger); }
+
+/**
+ * In the orb, the panel *is* a circle.
+ *
+ * Applied to the panel rather than only to the inner disc so the border, the
+ * shadow, and the backdrop blur all follow the round shape — a circular fill inside
+ * a rounded-square panel is a widget with a visible box around it.
+ */
+body[data-look="orb"] .panel { border-radius: 99px; }
+/* The accent hairline is a straight line, which does not belong on a disc. */
+body[data-look="orb"] .panel::before { display: none; }
+body[data-look="orb"] .panel::after { background: radial-gradient(circle at 50% 22%, var(--accent-soft), transparent 68%); }
+
+/**
+ * The header collapses to floating buttons.
+ *
+ * An orb has no room for a title bar, but it still has to be closable and
+ * settable — a widget with no way to turn itself off is the thing the close button
+ * exists to prevent. So the actions overlay the disc on hover and the rest of the
+ * header goes.
+ */
+body[data-look="orb"] .grip {
+  position: absolute;
+  inset: 0 0 auto;
+  justify-content: center;
+  padding: 3px 0 0;
+  border: 0;
+  background: none;
+  z-index: 2;
+}
+
+body[data-look="orb"] .grip-logo,
+body[data-look="orb"] .grip-title,
+body[data-look="orb"] .dot { display: none; }
+/* The open-main button goes too: clicking the orb itself does that. */
+body[data-look="orb"] #btnOpen { display: none; }
+body[data-look="orb"] .grip-actions { background: var(--panel-2); border-radius: 99px; padding: 1px; }
+
+body[data-look="orb"] .body,
+body[data-look="orb"] .hint { display: none; }
+
+/**
+ * No popover on the orb.
+ *
+ * The window is 92px across and the settings panel needs about 210, so a popover
+ * here would be clipped by the window itself — and a widget cannot grow sideways
+ * for a panel the way it grows downwards, because its width is what defines its
+ * shape. The gear opens the main Settings tab instead, which has every one of these
+ * controls including the look picker that gets back out of the orb.
+ */
+body[data-look="orb"] .settings { display: none !important; }
+
+/* ---- the bar ------------------------------------------------------------
+   One horizontal strip, for along the top of a screen where a tall panel would
+   cover work. Everything on one line: the header becomes the left end of it. */
+
+/**
+ * `flex-wrap`, so the popover can drop to a second line.
+ *
+ * The alternative — absolutely positioning the settings panel below the strip —
+ * cannot work: the panel clips its children, and the window is only as tall as the
+ * bar, so an overhanging popover would be cut off at both. Wrapping keeps it in
+ * normal flow, which means the ResizeObserver measures it and the window grows to
+ * fit exactly as it does on the card.
+ */
+body[data-look="bar"] .panel { display: flex; flex-wrap: wrap; align-items: stretch; }
+/* Narrow: on the bar the grip is a handle and three buttons, not a title bar. Its
+   width came from padding meant for a full-width header, which on one line reads as
+   dead space at the end the eye starts from. */
+body[data-look="bar"] .grip { flex: none; gap: 6px; padding: 0 8px; border-bottom: 0; border-right: 1px solid var(--border); }
+body[data-look="bar"] .body { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 6px 9px; }
+/**
+ * No wordmark on the bar, and no ellipsis where the state should be.
+ *
+ * Everything on the bar competes for one line, and "LIFELINE" was winning ~75px of
+ * it while the status word — the only thing the widget exists to say — was being
+ * truncated to "Prot…". The logo carries both the identity and, because it is drawn
+ * in the status colour, the state, in 16px. The window title still says the name for
+ * anyone who needs it spelled out.
+ */
+body[data-look="bar"] .grip-title { display: none; }
+/* Full width forces the wrap, so the popover is a row of its own under the strip. */
+body[data-look="bar"] .settings { flex: 0 0 100%; }
+
+/* On one line the sentence is the flexible part and the numbers are fixed. */
+body[data-look="bar"] .status-line { flex: 1; min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+body[data-look="bar"] .counts { flex: none; gap: 4px; }
+body[data-look="bar"] .count { padding: 3px 7px; }
+body[data-look="bar"] .count-value { font-size: 13px; }
+body[data-look="bar"] .count-label { font-size: 8.5px; }
+/* An alert list and a footnote both need vertical space a bar does not have. The
+   alerts are still reachable: the bar opens the Activity tab on click. */
+body[data-look="bar"] .alerts,
+body[data-look="bar"] .hint:not(#clickThroughHint) { display: none; }
+/* The chips lay out left-to-right instead of stacking. */
+body[data-look="bar"] .chips { flex-direction: row; flex-wrap: nowrap; overflow: hidden; }
+body[data-look="bar"] .chip { width: auto; flex: 0 1 auto; padding: 4px 8px; }
+body[data-look="bar"] .chip-sub { display: none; }
+
+/* The bar shows the mark rather than a plain dot: with the wordmark gone it is the
+   only thing identifying the strip, and it carries the status colour either way. */
+body[data-look="bar"] .dot { display: none; }
+/* The card keeps the logo too — it says the same thing as the dot and also says
+   which app it belongs to. */
+body[data-look="card"] .dot { display: none; }
+
+/* ---- which look, which widget ------------------------------------------ */
+
+/* The orb block only exists for the orb; the two bodies only for their own look. */
+body:not([data-look="orb"]) .orb { display: none; }
+body[data-look="orb"] .body.status,
+body[data-look="orb"] .body.shortcuts { display: none; }
+
+/* ---- which widget is this ---------------------------------------------- */
+
+body[data-widget="shortcuts"] .body.status { display: none; }
+body[data-widget="status"] .body.shortcuts { display: none; }
+/* Click-through is only offered where it makes sense — see the note in the HTML. */
+body[data-widget="shortcuts"] #clickThroughRow,
+body[data-widget="shortcuts"] #clickThroughHint { display: none; }
+
+/* ---- settings popover -------------------------------------------------- */
+
+.settings {
+  padding: 9px;
+  border-top: 1px solid var(--border);
+  background: #00000026;
+}
+
+[data-theme="light"] .settings { background: #00000008; }
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin-bottom: 6px;
+}
+
+.set-label {
+  flex: none;
+  width: 52px;
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
+.swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* ---- the look picker ----------------------------------------------------
+   Named buttons rather than swatches. A look is a shape, and a 17px square cannot
+   show the difference between a card and a bar — but three words can. */
+
+.looks { display: flex; gap: 4px; }
+
+.look-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.look-btn:hover { color: var(--text); border-color: var(--accent-border); }
+.look-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.look-btn[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent); }
+
+/* A tiny diagram of the shape, so the words are not the only cue. */
+.look-glyph { flex: none; width: 11px; height: 11px; border: 1.2px solid currentColor; opacity: 0.8; }
+.look-glyph[data-look="card"] { border-radius: 2px; }
+.look-glyph[data-look="bar"] { height: 4px; border-radius: 2px; }
+.look-glyph[data-look="orb"] { border-radius: 99px; }
+
+.swatch {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.swatch:hover { border-color: var(--text-dim); }
+.swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The selected one gets a ring rather than a border colour, so it reads as
+   chosen on a swatch whose own colour is nearly the border's. */
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); border-color: transparent; }
+
+input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.set-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.set-toggle input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+.set-toggle:hover { color: var(--text); }
+
+/* ---- click-through ------------------------------------------------------
+   The window ignores the mouse, so the panel is dimmed to show it: a widget that
+   looks normal but swallows no clicks is indistinguishable from a broken one.
+   The hint stays readable, because it says how to undo this. */
+
+body[data-click-through="true"] .panel { opacity: 0.85; }
+body[data-click-through="true"] .grip-actions { opacity: 0 !important; }

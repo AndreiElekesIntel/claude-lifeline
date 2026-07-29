@@ -10,7 +10,7 @@ It hooks into Claude Code's own failure event, waits for the appropriate backoff
   <a href="https://github.com/AndreiElekesIntel/claude-lifeline/releases/latest"><img alt="Download" src="https://img.shields.io/badge/Download-Windows%20installer-5b5bd6?style=flat-square"></a>
   <img alt="Platform" src="https://img.shields.io/badge/Windows%2010%20%2F%2011-x64%20%C2%B7%20arm64-2f2f3a?style=flat-square">
   <img alt="Dependencies" src="https://img.shields.io/badge/runtime%20deps-0-3f9a5c?style=flat-square">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-172%20unit%20%C2%B7%2059%20e2e-3f9a5c?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-279%20unit%20%C2%B7%20109%20e2e-3f9a5c?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2f2f3a?style=flat-square">
 </p>
 
@@ -35,6 +35,24 @@ Want the tray app, a desktop shortcut and start-at-logon too? Double-click **`ru
 
 ---
 
+## What the app adds
+
+The recovery needs none of this — it runs inside Claude Code. But once there is a window, there are things worth putting in it:
+
+| | |
+|---|---|
+| **History** | every session ever recorded on the machine, searchable, resumable in one click |
+| **Launchpad** | sessions you start often, saved as presets with a global hotkey each |
+| **Analytics** | time, tokens and estimated spend, computed on your machine from transcripts |
+| **Desktop widgets** | your shortcuts, or Lifeline's status, floating on the wallpaper — as a card, a bar, or an orb |
+
+<p align="center">
+  <img alt="Status widget" src="docs/screenshots/widget-status-card.png" height="150">
+  <img alt="Shortcuts widget" src="docs/screenshots/widget-shortcuts.png" height="150">
+</p>
+
+---
+
 ## Documentation
 
 Everything is in the [**wiki**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki).
@@ -44,7 +62,7 @@ Everything is in the [**wiki**](https://github.com/AndreiElekesIntel/claude-life
 | [**How It Works**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/How-It-Works) | the `StopFailure` hook, exit code 2, and why nothing has to be running |
 | [**What It Recovers From**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/What-It-Recovers-From) | all ten failure classes — which are waited out, which alert you, and why |
 | [**Safety**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/Safety) | the four limits that make auto-resume unable to spin |
-| [**The App**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/The-App) | every tab, with screenshots |
+| [**The App**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/The-App) | every tab and both desktop widgets, with screenshots |
 | [**Install and Uninstall**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/Install-and-Uninstall) | full reference, verification, SmartScreen, autostart |
 | [**Configuration**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/Configuration) | every key, and where each file lives on disk |
 | [**Extras**](https://github.com/AndreiElekesIntel/claude-lifeline/wiki/Extras) | `npm run pin`, and powering the machine off when work is genuinely finished |

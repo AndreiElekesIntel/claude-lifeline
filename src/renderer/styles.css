@@ -781,6 +781,9 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 #setAnalytics { --rail: var(--info); }
 #setNotify    { --rail: var(--hue-violet); }
 #setAppearance { --rail: var(--hue-pink); }
+/* Paired with Appearance, because that is what a widget's theme belongs to — the
+   accent shifts it enough to read as its own group in the jump list. */
+#setWidgets   { --rail: var(--accent); }
 #setScope     { --rail: var(--hue-teal); }
 #setAdvanced  { --rail: var(--text-faint); }
 /* Every group heading, wherever it sits in the header markup.
@@ -1107,5 +1110,265 @@ button.path-row:hover .path-open, button.path-row:focus-visible .path-open { opa
 .toast.danger .bar { background: var(--danger); }
 @keyframes toast-in { from { opacity: 0; transform: translateX(24px) scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes toast-out { to { opacity: 0; transform: translateX(24px); } }
+
+/* ================================ history ================================ */
+
+.input.search { min-width: 230px; }
+/* The native clear button is invisible against a dark field otherwise. */
+.input.search::-webkit-search-cancel-button { filter: invert(0.6); cursor: pointer; }
+
+.history-list { display: flex; flex-direction: column; gap: 12px; }
+
+.day-group {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.day-head {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: var(--bg-elev-2);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.day-head:hover { background: var(--bg-hover, var(--bg-elev-2)); }
+.day-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.day-group.collapsed .day-head { border-bottom: none; }
+.day-group.collapsed .day-sessions { display: none; }
+
+.day-caret { width: 12px; font-size: 10px; color: var(--text-faint); flex: none; }
+.day-label { font-size: 13.5px; font-weight: 600; }
+.day-meta { display: flex; gap: 14px; margin-left: auto; align-items: center; }
+.day-stat { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.day-stat.accent { color: var(--accent-text); font-weight: 550; }
+/* A total that may double-count concurrent sessions says so rather than lying. */
+.day-stat.approx { border-bottom: 1px dotted var(--text-faint); cursor: help; }
+.day-stat.approx::before { content: "~"; }
+
+.day-sessions { display: flex; flex-direction: column; }
+
+.hist-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 14px; align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.day-sessions .hist-row:first-child { border-top: none; }
+.hist-row:hover { background: var(--bg-elev-2); }
+
+.hist-main { min-width: 0; }
+.hist-title {
+  font-size: 13px; font-weight: 550;
+  /* Titles are model-generated and can be a full sentence; one line each keeps
+     the rows scannable at a glance, which is what a history is for. */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hist-sub { display: flex; gap: 9px; margin-top: 2px; font-size: 11.5px; color: var(--text-faint); flex-wrap: wrap; }
+.hist-project { color: var(--text-dim); font-weight: 550; }
+.hist-branch { font-family: var(--mono); }
+.hist-branch::before { content: "⑂ "; }
+
+.hist-stats { display: flex; gap: 12px; font-variant-numeric: tabular-nums; font-size: 12px; }
+.hist-time { color: var(--text-dim); }
+.hist-cost { color: var(--accent-text); font-weight: 550; }
+
+/* Revealed on hover so a long list is not a wall of buttons, but kept in the
+   layout at all times — appearing controls would reflow every row under the
+   pointer. Always visible on a touch device, which has no hover. */
+.hist-actions { display: flex; gap: 6px; opacity: 0; transition: opacity 0.12s var(--ease); }
+.hist-row:hover .hist-actions,
+.hist-row:focus-within .hist-actions { opacity: 1; }
+@media (hover: none) { .hist-actions { opacity: 1; } }
+
+.rename-input { width: 100%; padding: 4px 8px; font-size: 13px; }
+
+@media (max-width: 780px) {
+  .hist-row { grid-template-columns: 1fr auto; }
+  .hist-actions { grid-column: 1 / -1; opacity: 1; }
+  .day-meta { gap: 9px; }
+}
+
+/* =============================== launchpad =============================== */
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.preset-card {
+  display: flex; flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.14s var(--ease), transform 0.14s var(--ease);
+}
+.preset-card:hover { border-color: var(--accent-border); transform: translateY(-1px); }
+
+/* The card body is the launch button: it is the primary action, so it gets the
+   whole tile rather than a small target inside one. */
+.preset-launch {
+  display: flex; flex-direction: column; gap: 7px; align-items: flex-start;
+  flex: 1;
+  padding: 14px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.preset-launch:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.preset-launch:disabled { cursor: default; opacity: 0.6; }
+
+.preset-label { font-size: 14px; font-weight: 600; }
+.preset-bits { display: flex; gap: 5px; flex-wrap: wrap; }
+.preset-chip {
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+}
+.preset-chip.skill { font-family: var(--mono); color: var(--accent-text); border-color: var(--accent-border); background: var(--accent-soft); }
+.preset-prompt {
+  font-size: 11.5px; line-height: 1.5; color: var(--text-faint);
+  /* Two lines of the prompt is enough to tell two shortcuts apart without
+     letting a long one set the height of every card in the row. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.preset-accel {
+  margin-top: auto;
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.preset-foot {
+  display: flex; gap: 6px; justify-content: flex-end;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border-top: 1px solid var(--border);
+}
+
+.field.wide { grid-column: 1 / -1; }
+.input-with-btn { display: flex; gap: 6px; }
+.input-with-btn .input { flex: 1; min-width: 0; }
+
+.field-block { margin-top: 16px; display: flex; flex-direction: column; gap: 5px; }
+.field-hint.tight { margin: 0; }
+.input.textarea { font-family: var(--mono); font-size: 12px; line-height: 1.6; resize: vertical; }
+
+.skill-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.skill-chip {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  cursor: pointer;
+}
+.skill-chip:has(input:checked) { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-border); }
+/* A skill the preset names but that is no longer installed. Shown, not dropped:
+   removing it silently would make the shortcut quietly do less than it says. */
+.skill-chip.missing { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); text-decoration: line-through; }
+.skill-chip input { accent-color: var(--accent); margin: 0; }
+
+/* ---------- Desktop widget settings ----------
+   Two cards, one per widget, each with its own enable switch and appearance
+   controls. Side by side rather than stacked so the two are comparable — they are
+   the same set of choices twice, and the differences (the status widget's
+   click-through) read as differences rather than as a longer list. */
+.widget-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+.widget-card {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.widget-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.widget-card-title { font-size: 13.5px; font-weight: 600; }
+.widget-card-desc { margin-top: 1px; font-size: 12px; color: var(--text-dim); }
+
+/* Everything except the enable switch dims when the widget is off. Still
+   interactive: setting a theme before turning it on is reasonable, and disabling
+   the controls would mean the only way to configure a widget is to make it appear
+   on screen first. */
+.widget-card-body { display: flex; flex-direction: column; gap: 11px; transition: opacity 0.2s var(--ease); }
+.widget-card[data-enabled="false"] .widget-card-body { opacity: 0.55; }
+
+.widget-row { display: flex; align-items: center; gap: 10px; min-height: 26px; }
+.widget-row-label { flex: none; width: 74px; font-size: 12px; font-weight: 550; color: var(--text-dim); }
+/* 20px tall, not the browser's 16: a slider is dragged, and the layout suite holds
+   every control to a 20px minimum hit box for exactly this reason. */
+.widget-row input[type="range"] { flex: 1; min-width: 0; height: 20px; accent-color: var(--accent); }
+.widget-row-value { flex: none; width: 42px; font-size: 11.5px; color: var(--text-faint); text-align: right; font-variant-numeric: tabular-nums; }
+
+.widget-swatches { display: flex; flex-wrap: wrap; gap: 5px; }
+.widget-swatch {
+  width: 24px; height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.widget-swatch:hover { border-color: var(--text-dim); }
+.widget-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A ring rather than a border colour: some of these swatches are themselves close
+   to the border colour, so a border change would be invisible on exactly the ones
+   that need it most. */
+.widget-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); border-color: transparent; }
+
+/* The look picker. Named buttons rather than swatches: a 24px chip cannot show the
+   difference between a card and a bar, and the glyph carries the shape so the
+   choice is not colour-dependent. */
+.widget-looks { display: flex; flex-wrap: wrap; gap: 6px; }
+.widget-look {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.widget-look:hover { color: var(--text); border-color: var(--accent); }
+.widget-look:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.widget-look[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent); }
+/* A diagram of the shape, drawn in currentColor so it follows the pressed state. */
+.widget-look-glyph { flex: none; width: 12px; height: 12px; border: 1.4px solid currentColor; opacity: 0.85; }
+.widget-look-glyph[data-look="card"] { border-radius: 2px; }
+.widget-look-glyph[data-look="bar"] { height: 5px; border-radius: 2px; }
+.widget-look-glyph[data-look="orb"] { border-radius: 999px; }
+
+.widget-checks { display: flex; flex-direction: column; gap: 4px; }
+.widget-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+/* A native checkbox renders at 13px, which is a small target for a mouse and below
+   the 20px floor the layout suite enforces. Sized up rather than wrapped in a hit
+   area, so the box the user aims at is the box they can see. */
+.widget-check input { width: 20px; height: 20px; flex: none; accent-color: var(--accent); margin: 0; cursor: pointer; }
+.widget-check-hint { font-size: 11.5px; color: var(--text-faint); }
+
+.widget-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.widget-where { font-size: 11.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 
 .hidden { display: none !important; }

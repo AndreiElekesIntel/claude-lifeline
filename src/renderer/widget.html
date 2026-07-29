@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-accent="violet">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Same lockdown as the main window: everything is local, so nothing may be
+         fetched, inlined, or evaluated. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self';"
+    />
+    <title>Claude Lifeline widget</title>
+    <link rel="stylesheet" href="widget.css" />
+  </head>
+  <body>
+    <!-- One document for both widgets, switched by data-widget on <body>. They
+         share the whole chrome — panel, drag handle, settings popover, themes — and
+         differ only in the block in the middle, so two files would be two copies of
+         everything that is not the difference. -->
+    <div class="panel" id="panel">
+      <!-- The drag handle. `-webkit-app-region: drag` in the CSS hands the move to
+           the compositor, which is smooth; doing it from mousemove would be an IPC
+           round trip per frame. -->
+      <header class="grip" id="grip">
+        <!-- The app's own mark, drawn at runtime in the status colour — so it is
+             both the identity and part of the readout. src is set from state; the
+             CSP allows data: images for exactly this. -->
+        <img class="grip-logo" id="gripLogo" alt="" aria-hidden="true" />
+        <span class="dot" id="dot" aria-hidden="true"></span>
+        <span class="grip-title" id="title">Lifeline</span>
+        <span class="grip-actions">
+          <button class="icon-btn" id="btnSettings" title="Widget settings" aria-label="Widget settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8" />
+            </svg>
+          </button>
+          <button class="icon-btn" id="btnOpen" title="Open Claude Lifeline" aria-label="Open Claude Lifeline">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-8 8M10 5H5v14h14v-5" /></svg>
+          </button>
+          <button class="icon-btn close" id="btnHide" title="Hide this widget" aria-label="Hide this widget">
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l10 10M11 1L1 11" /></svg>
+          </button>
+        </span>
+      </header>
+
+      <!-- ===== the shortcuts widget ===== -->
+      <div class="body shortcuts" id="bodyShortcuts">
+        <div class="chips" id="presetList"></div>
+        <p class="hint" id="presetEmpty">
+          No shortcuts saved yet. Open Lifeline and create one on the Launchpad.
+        </p>
+      </div>
+
+      <!-- ===== the status widget ===== -->
+      <div class="body status" id="bodyStatus">
+        <!-- The hero: the mark, big, with the state beside it. This is the part
+             that makes the widget look like something rather than a table of
+             numbers — the logo is drawn in the status colour, so the largest
+             element on the panel is also the fastest thing to read. -->
+        <div class="hero">
+          <span class="hero-mark" id="heroMark">
+            <img class="hero-logo" id="heroLogo" alt="" aria-hidden="true" />
+            <span class="hero-ring" aria-hidden="true"></span>
+          </span>
+          <span class="hero-text">
+            <span class="hero-status" id="heroStatus">Starting…</span>
+            <span class="hero-sub" id="heroSub"></span>
+          </span>
+        </div>
+        <!-- Kept for the bar look, which has no room for the hero block but still
+             needs the sentence. Hidden in the card, where the hero says it. -->
+        <p class="status-line" id="statusLine">Starting…</p>
+        <div class="counts" id="counts"></div>
+        <!-- Only rendered when there is something wrong. A widget that always shows
+             an "errors" row trains the user to ignore the row. -->
+        <div class="alerts hidden" id="alerts"></div>
+        <p class="hint" id="statusFoot"></p>
+      </div>
+
+      <!-- ===== the orb =====
+           A separate block rather than a restyling of the card, because it is a
+           different amount of information, not a smaller arrangement of the same
+           information: the mark, one number, and nothing else. -->
+      <div class="orb" id="bodyOrb">
+        <img class="orb-logo" id="orbLogo" alt="" aria-hidden="true" />
+        <span class="orb-value" id="orbValue">—</span>
+        <span class="orb-ring" aria-hidden="true"></span>
+      </div>
+
+      <!-- ===== settings, in a popover ===== -->
+      <div class="settings hidden" id="settings">
+        <!-- Looks first, because it is the one setting that changes what the other
+             settings are for: the width slider does nothing to an orb. -->
+        <div class="set-row">
+          <span class="set-label">Look</span>
+          <div class="looks" id="lookButtons"></div>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Theme</span>
+          <div class="swatches" id="themeSwatches"></div>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Accent</span>
+          <div class="swatches" id="accentSwatches"></div>
+        </div>
+        <label class="set-row">
+          <span class="set-label">Opacity</span>
+          <input type="range" id="opacity" min="35" max="100" step="5" />
+        </label>
+        <!-- Hidden for the fixed-width looks: a slider that visibly does nothing is
+             worse than no slider. -->
+        <label class="set-row" id="widthRow">
+          <span class="set-label">Width</span>
+          <input type="range" id="width" min="180" max="520" step="10" />
+        </label>
+        <label class="set-toggle">
+          <input type="checkbox" id="onTop" />
+          <span>Always on top</span>
+        </label>
+        <label class="set-toggle">
+          <input type="checkbox" id="compact" />
+          <span>Compact</span>
+        </label>
+        <!-- Only offered on the status widget: a click-through panel of buttons is
+             a panel of buttons that cannot be pressed. -->
+        <label class="set-toggle" id="clickThroughRow">
+          <input type="checkbox" id="clickThrough" />
+          <span>Click through</span>
+        </label>
+        <p class="hint tight" id="clickThroughHint">
+          Clicks pass to whatever is behind. Turn it off from the tray menu if you
+          need to move the widget again.
+        </p>
+      </div>
+    </div>
+
+    <script src="widget.js"></script>
+  </body>
+</html>

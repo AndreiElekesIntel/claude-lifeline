@@ -32,6 +32,59 @@ contextBridge.exposeInMainWorld('lifeline', {
   /** May read every transcript on disk, so it is only called on demand. */
   analyticsReport: (opts) => ipcRenderer.invoke('analytics-report', opts || {}),
 
+  /**
+   * Past sessions grouped by day, filtered by `query`.
+   *
+   * Grouped in main rather than here because a day's total has to union the
+   * sessions' intervals — summing them triple-counts an hour with three agents in
+   * it — and that arithmetic is unit-tested where it lives. Never scans: it groups
+   * the last report, so typing in the search box costs nothing.
+   */
+  historyGroups: (opts) => ipcRenderer.invoke('history-groups', opts || {}),
+
+  /**
+   * Open a past session again, in a new terminal window.
+   *
+   * Takes an id, and main checks that id against the sessions and transcripts
+   * actually on disk before any of it reaches a command line — the same "name a
+   * key, never a path" rule as openPath and openLink. It matters more here: these
+   * ids come from the analytics scan, which reads transcripts, so they are
+   * model-authored text rather than something the app chose.
+   */
+  resumeSession: (sessionId) => ipcRenderer.invoke('resume-session', sessionId),
+  /** Whether a rename is allowed *now*, so the UI can disable the control first. */
+  canRenameSession: (sessionId) => ipcRenderer.invoke('can-rename-session', sessionId),
+  renameSession: (sessionId, name) => ipcRenderer.invoke('rename-session', sessionId, name),
+
+  /**
+   * Launchpad presets.
+   *
+   * Launching names a preset by id rather than sending a configuration, so the
+   * renderer cannot ask for a session that was never saved — the argv is always
+   * built from config by main.
+   */
+  launchPreset: (id) => ipcRenderer.invoke('launch-preset', id),
+  savePreset: (preset) => ipcRenderer.invoke('save-preset', preset),
+  deletePreset: (id) => ipcRenderer.invoke('delete-preset', id),
+  reorderPresets: (ids) => ipcRenderer.invoke('reorder-presets', ids),
+  /** Write a real `.lnk` on the Desktop for this preset. */
+  presetToDesktop: (id) => ipcRenderer.invoke('preset-to-desktop', id),
+  /** Pick a working directory with the native dialog, since the renderer has no fs. */
+  pickDirectory: () => ipcRenderer.invoke('pick-directory'),
+  /** Skill names found in ~/.claude/skills, to offer in the preset editor. */
+  listSkills: () => ipcRenderer.invoke('list-skills'),
+
+  /**
+   * Forget a widget's remembered position.
+   *
+   * The only widget channel the main window needs: everything else about a widget
+   * is a config field and goes through saveConfig like any other setting. This one
+   * is separate because clearing the position is not just a write — the window has
+   * to be rebuilt to be re-placed, since applying settings to an open widget
+   * deliberately leaves its position alone.
+   */
+  resetWidgetPosition: (id) => ipcRenderer.invoke('reset-widget-position', id),
+
   onState: (cb) => {
     const h = (_e, state) => cb(state);
     ipcRenderer.on('state', h);

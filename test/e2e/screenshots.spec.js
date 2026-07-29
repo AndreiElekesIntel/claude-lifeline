@@ -108,12 +108,84 @@ async function shoot(page, name) {
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`) });
 }
 
+/**
+ * A widget window, once its renderer has drawn.
+ *
+ * Found by `window.widget.id` for the same reason widgets.spec.js does: both widgets
+ * are created in the same tick from config, so window order says nothing about which
+ * is which, and the main window is in the same list.
+ */
+async function widgetPage(app, id, { timeout = 20_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const page of app.windows()) {
+      try {
+        if ((await page.evaluate(() => (window.widget ? window.widget.id : null))) === id) {
+          await page.waitForSelector('#panel');
+          return page;
+        }
+      } catch {
+        /* a window mid-navigation; try the next */
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`The ${id} widget never appeared.`);
+}
+
+/**
+ * A widget, photographed with its rounded corners and its shadow intact.
+ *
+ * `omitBackground` is the whole point. A widget is a transparent window with the
+ * panel drawn inside it — screenshotting it opaquely fills the gutter with black,
+ * which puts a hard square around a design whose corners are the recognisable part.
+ * No viewport is set either: the window is already exactly the size of the widget,
+ * and resizing it would photograph a shape the user never sees.
+ */
+async function shootWidget(page, name) {
+  await page.screenshot({ path: path.join(SHOTS, `${name}.png`), omitBackground: true });
+}
+
 test('capture README screenshots in both themes', async () => {
   const sandbox = fx.makeSandbox('shots');
   seed(sandbox);
   // Hooks pre-installed so the shots show the healthy steady state, not the
   // first-run warning banner.
-  fx.writeConfig(sandbox, { ui: { theme: 'dark', accent: 'violet', startMinimised: false } });
+  fx.writeConfig(sandbox, {
+    ui: { theme: 'dark', accent: 'violet', startMinimised: false },
+    // Launchpad photographs as an empty state otherwise, and the empty state is
+    // already covered by its own test. These are plausible, not real: no shot
+    // ever launches one.
+    launchpad: {
+      presets: [
+        {
+          id: 'aaaaaa',
+          label: 'Morning triage',
+          cwd: 'C:/work/payments-api',
+          model: 'opus',
+          skills: ['code-review'],
+          prePrompt: 'Read the overnight CI failures and tell me which ones are real.',
+          accelerator: 'CommandOrControl+Alt+1',
+        },
+        {
+          id: 'bbbbbb',
+          label: 'Ship the release',
+          cwd: 'C:/work/payments-api',
+          model: 'sonnet',
+          permissionMode: 'plan',
+          prePrompt: 'Draft the release notes from the commits since the last tag.',
+          accelerator: 'CommandOrControl+Alt+2',
+        },
+        {
+          id: 'cccccc',
+          label: 'Charts',
+          cwd: 'C:/work/telemetry-dashboard',
+          skills: ['frontend-review'],
+          prePrompt: 'Pick up the latency chart work.',
+        },
+      ],
+    },
+  });
   // Analytics reads transcripts and Usage reads Claude Code's own stats file, so
   // both need seeding or those two tabs photograph as empty states.
   fx.writeTranscript(sandbox, {
@@ -163,6 +235,16 @@ test('capture README screenshots in both themes', async () => {
     await page.click('.nav-item[data-tab="sessions"]');
     await expect(page.locator('#sessionBody tr').first()).toBeVisible();
     await shoot(page, 'sessions-dark');
+
+    // History scans transcripts on first open, so it is given the same generous
+    // timeout Analytics gets rather than being photographed mid-scan.
+    await page.click('.nav-item[data-tab="history"]');
+    await expect(page.locator('#historyList .hist-row').first()).toBeVisible({ timeout: 20_000 });
+    await shoot(page, 'history-dark');
+
+    await page.click('.nav-item[data-tab="launchpad"]');
+    await expect(page.locator('#presetGrid .preset-card').first()).toBeVisible();
+    await shoot(page, 'launchpad-dark');
 
     await page.click('.nav-item[data-tab="analytics"]');
 
@@ -223,6 +305,14 @@ test('capture README screenshots in both themes', async () => {
     await expect(page.locator('#sessionBody tr').first()).toBeVisible();
     await shoot(page, 'sessions-light');
 
+    await page.click('.nav-item[data-tab="history"]');
+    await expect(page.locator('#historyList .hist-row').first()).toBeVisible({ timeout: 20_000 });
+    await shoot(page, 'history-light');
+
+    await page.click('.nav-item[data-tab="launchpad"]');
+    await expect(page.locator('#presetGrid .preset-card').first()).toBeVisible();
+    await shoot(page, 'launchpad-light');
+
     await page.click('.nav-item[data-tab="settings"]');
     await page.locator('#content').evaluate((el) => { el.scrollTop = 0; });
     await page.waitForTimeout(250);
@@ -230,6 +320,98 @@ test('capture README screenshots in both themes', async () => {
     await page.locator('#policyList').scrollIntoViewIfNeeded();
     await page.waitForTimeout(250);
     await shoot(page, 'policies-light');
+  } finally {
+    await fx.close(ctx);
+  }
+});
+
+/**
+ * The desktop widgets, photographed as the windows they are.
+ *
+ * A separate test rather than more shots in the one above, because a widget is not a
+ * view inside the main window — it is its own transparent, frameless window, shot at
+ * its own size with `omitBackground` so the rounded corners survive. Enabling them in
+ * the main run would also put two always-on-top windows over every other shot.
+ *
+ * `LIFELINE_NO_SPAWN=1`, as in widgets.spec.js: nothing here clicks a shortcut chip,
+ * but a screenshot run must not be one keystroke away from starting a real session
+ * against whatever the developer is working on.
+ */
+test('capture the desktop widget screenshots', async () => {
+  const sandbox = fx.makeSandbox('shots-widgets');
+  seed(sandbox);
+  fx.writeConfig(sandbox, {
+    ui: { theme: 'dark', accent: 'violet', startMinimised: false },
+    widgets: {
+      shortcuts: { enabled: true, theme: 'midnight', width: 300 },
+      status: { enabled: true, theme: 'midnight', width: 300 },
+    },
+    launchpad: {
+      presets: [
+        {
+          id: 'aaaaaa',
+          label: 'Morning triage',
+          cwd: 'C:/work/payments-api',
+          model: 'opus',
+          accelerator: 'CommandOrControl+Alt+1',
+        },
+        {
+          id: 'bbbbbb',
+          label: 'Ship the release',
+          cwd: 'C:/work/payments-api',
+          model: 'sonnet',
+          accelerator: 'CommandOrControl+Alt+2',
+        },
+        { id: 'cccccc', label: 'Charts', cwd: 'C:/work/telemetry-dashboard', accelerator: 'CommandOrControl+Alt+3' },
+      ],
+    },
+  });
+
+  const ctx = await fx.launch(sandbox, { LIFELINE_NO_SPAWN: '1' });
+  const { page } = ctx;
+
+  try {
+    const shortcuts = await widgetPage(ctx.app, 'shortcuts');
+    await expect(shortcuts.locator('.chip').first()).toBeVisible();
+    // The height is a round trip — the renderer measures, main resizes — so a shot
+    // taken the moment the chips appear catches the placeholder height instead.
+    await page.waitForTimeout(700);
+    await shootWidget(shortcuts, 'widget-shortcuts');
+
+    const status = await widgetPage(ctx.app, 'status');
+    await expect(status.locator('.hero')).toBeVisible();
+    await page.waitForTimeout(700);
+    await shootWidget(status, 'widget-status-card');
+
+    /**
+     * The other two looks, switched from the main window's picker.
+     *
+     * Not from the widget's own popover: that would leave the popover open in the
+     * shot, and the orb has no popover to switch back from anyway.
+     */
+    await page.click('.nav-item[data-tab="settings"]');
+    const card = page.locator('.widget-card[data-widget="status"]');
+
+    await card.locator('.widget-look[data-value="bar"]').click();
+    const bar = await widgetPage(ctx.app, 'status');
+    await expect(bar.locator('#statusLine')).toBeVisible();
+    await page.waitForTimeout(700);
+    await shootWidget(bar, 'widget-status-bar');
+
+    await card.locator('.widget-look[data-value="orb"]').click();
+    const orb = await widgetPage(ctx.app, 'status');
+    await expect(orb.locator('#orbValue')).toBeVisible();
+    await page.waitForTimeout(700);
+    await shootWidget(orb, 'widget-status-orb');
+
+    // And the settings card that all of the above is chosen from. Scrolled so the
+    // group starts at the top of the frame — `scrollIntoViewIfNeeded` stops as soon
+    // as the element is visible, which leaves the previous group cut through a
+    // heading above it.
+    await card.locator('.widget-look[data-value="card"]').click();
+    await page.locator('#setWidgets').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await page.waitForTimeout(400);
+    await shoot(page, 'widgets-settings-dark');
   } finally {
     await fx.close(ctx);
   }

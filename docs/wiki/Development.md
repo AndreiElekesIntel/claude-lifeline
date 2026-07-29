@@ -1,8 +1,8 @@
 # Development
 
 ```bash
-npm test             # 172 unit tests
-npm run test:e2e     # 59 Playwright tests against the real Electron app
+npm test             # 279 unit tests
+npm run test:e2e     # 109 Playwright tests against the real Electron app
 npm run lint         # project-specific invariant checks
 npm run screenshots  # regenerate docs/screenshots/
 npm run wiki         # mirror docs/wiki/ to the GitHub wiki
@@ -16,7 +16,7 @@ Tests redirect `LIFELINE_HOME` and `CLAUDE_CONFIG_DIR` to a throwaway directory 
 
 Roughly one full `npm run test:e2e` in three ends with a single test reporting `worker process exited unexpectedly (code=3221226505)`. That code is `0xC0000409` — an Electron process crashing, not an assertion failing, which is why the message carries no diff.
 
-It lands on a **different test each time** and every one of them passes when run alone or when its own spec file is run alone, so treat it as launch-churn from starting and tearing down ~60 Electron instances back to back rather than as a defect in whichever test got named. Re-run the file before investigating; if the *same* test fails twice in isolation, that is a real failure and this note does not apply.
+It lands on a **different test each time** and every one of them passes when run alone or when its own spec file is run alone, so treat it as launch-churn from starting and tearing down ~110 Electron instances back to back rather than as a defect in whichever test got named. Re-run the file before investigating; if the *same* test fails twice in isolation, that is a real failure and this note does not apply.
 
 ## Layout
 
@@ -29,8 +29,12 @@ src/
   shared/analytics.js     transcript reading: time, tokens, cost
   shared/claude-stats.js  Claude Code's own /usage cache, windowed
   shared/idle-shutdown.js the "is everything really finished" veto
+  shared/launchpad.js     saved one-click sessions, validated
+  shared/widgets.js       widget settings, and where a widget is allowed to appear
   main/                   Electron main, tray, monitor
+  main/widget-windows.js  the two desktop widget windows: lifecycle and placement
   renderer/               the UI
+  renderer/widget.*       one document for both widgets, switched by data-widget
 scripts/
   cli.mjs                 install / uninstall / pin / doctor / status
   idle-shutdown.mjs       the scheduled shutdown check

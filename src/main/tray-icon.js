@@ -132,9 +132,23 @@ function drawIcon(size, status) {
   return encodePNG(size, size, px);
 }
 
-/** Data URL for the same art, so the renderer can show it in the header. */
+/**
+ * Data URL for the same art, so a renderer can show it.
+ *
+ * Memoised, and now worth it: the art is drawn by supersampling every pixel nine
+ * times, and there are only ever a handful of distinct size/status pairs. Before the
+ * widgets this was called once per state push; each widget showing the logo turned
+ * that into three redraws of identical images every five seconds, forever.
+ */
+const urlCache = new Map();
+
 function iconDataUrl(size, status) {
-  return `data:image/png;base64,${drawIcon(size, status).toString('base64')}`;
+  const key = `${size}:${status}`;
+  const hit = urlCache.get(key);
+  if (hit) return hit;
+  const url = `data:image/png;base64,${drawIcon(size, status).toString('base64')}`;
+  urlCache.set(key, url);
+  return url;
 }
 
 module.exports = { drawIcon, iconDataUrl, COLOURS };

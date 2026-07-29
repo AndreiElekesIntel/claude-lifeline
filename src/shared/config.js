@@ -86,6 +86,78 @@ const DEFAULTS = {
   policies: {},
 
   /**
+   * Launchpad presets — one saved session configuration per button.
+   *
+   * An array rather than a keyed object, because the order is the layout: these
+   * are buttons on a grid, and the user drags them into the order they think in.
+   * `id` is what a shortcut or a desktop `.lnk` names, so it has to outlive any
+   * reordering or rename.
+   *
+   * Empty by default. A preset is a launch instruction — a working directory, a
+   * model, and often a pre-prompt that runs unattended — and inventing plausible
+   * ones would mean shipping buttons that start real sessions in directories the
+   * user never chose. The tab explains itself and offers to make the first one.
+   */
+  launchpad: {
+    presets: [],
+  },
+
+  /**
+   * The two desktop widgets — a shortcuts panel and a status readout.
+   *
+   * Both off by default. A frameless window that appears on someone's desktop
+   * uninvited is the kind of thing an app gets uninstalled over, and each widget is
+   * an addition to a UI that works without it.
+   *
+   * Position is null rather than a corner because "where it was last dragged" is
+   * the only position worth remembering, and there isn't one yet. widgets.js
+   * decides where a null lands, and — more importantly — whether a *saved* position
+   * is still on a screen that exists.
+   */
+  widgets: {
+    shortcuts: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 260,
+      theme: 'system',
+      accent: 'violet',
+      /**
+       * The shape, not the colours — a card, or one horizontal bar. (The status
+       * widget has a third, the orb; a disc holding three shortcuts would either
+       * hide two of them or stop being a disc, so it is not offered here.)
+       *
+       * The card is the default because it is the only look that explains itself.
+       */
+      look: 'card',
+      opacity: 1,
+      alwaysOnTop: true,
+      clickThrough: false,
+      compact: false,
+    },
+    status: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 240,
+      theme: 'system',
+      accent: 'violet',
+      /** card, bar, or orb — the orb being the mark and a single number. */
+      look: 'card',
+      opacity: 1,
+      alwaysOnTop: true,
+      /**
+       * A readout rather than a control panel, so letting clicks fall through to
+       * whatever is underneath is a reasonable thing to want. Off by default,
+       * because a window that cannot be clicked also cannot be dragged, and
+       * discovering that by trying is confusing.
+       */
+      clickThrough: false,
+      compact: false,
+    },
+  },
+
+  /**
    * Hook installation into Claude Code's settings.json.
    *
    * On by default: Lifeline cannot recover anything without its hooks registered,
