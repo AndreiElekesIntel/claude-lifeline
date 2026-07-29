@@ -388,12 +388,14 @@ scripts/
 
 ## Contributing
 
-Issues and pull requests are welcome. `main` is protected, so changes land through a reviewed PR:
+Issues and pull requests are welcome — the most valuable report is a way a session can die that Lifeline does not catch yet. `main` is protected, so changes land through a reviewed PR:
 
 1. Fork, then branch from `main`.
 2. Make the change, and add a test that would have failed before it.
-3. `npm test && npm run test:e2e && npm run lint` — all three must be clean.
+3. `npm test && npm run test:e2e && npm run lint` — all three must be clean. CI runs the same on Windows.
 4. Open a PR describing what failure mode the change addresses.
+
+[**CONTRIBUTING.md**](CONTRIBUTING.md) has the house rules, the invariants lint enforces, and what to establish before proposing that a new failure class auto-resume.
 
 Comments here explain *why*, not what. If a line looks odd, the odd part is usually the point — say so in a comment rather than leaving the next reader to rediscover it.
 

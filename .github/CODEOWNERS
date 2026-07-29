@@ -1,0 +1,5 @@
+# Every change needs a review from the owner.
+#
+# This file is what makes "require review from code owners" mean something —
+# without it that branch rule matches nothing and passes silently.
+*       @AndreiElekesIntel
