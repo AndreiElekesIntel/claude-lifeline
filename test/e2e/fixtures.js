@@ -201,11 +201,39 @@ async function launch(sandbox, extraEnv = {}) {
     },
   });
 
-  const page = await app.firstWindow();
+  const page = await mainWindow(app);
   await page.waitForLoadState('domcontentloaded');
   // The status pill only gets a data-status once the first state has applied.
   await page.waitForSelector('#statusPill[data-status]');
   return { app, page, sandbox };
+}
+
+/**
+ * The main window, which is not necessarily the first one.
+ *
+ * `firstWindow()` returns whichever window Electron reports first, and with a
+ * desktop widget enabled that can be the widget — it is created in the same tick as
+ * the main window, from config, before anything has painted. Every test then hung
+ * for thirty seconds waiting for `#statusPill` on a page that has no sidebar and no
+ * status pill, and reported it as a timeout rather than as the wrong window.
+ *
+ * Identified by the absence of `window.widget` rather than by the presence of an
+ * element, because the check has to be answerable before the page has rendered:
+ * the preload is what differs, and it has run by the time a page is enumerable.
+ */
+async function mainWindow(app, { timeout = 30_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const page of app.windows()) {
+      try {
+        if (!(await page.evaluate(() => Boolean(window.widget)))) return page;
+      } catch {
+        /* a window mid-navigation; try the next */
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('The main window never appeared.');
 }
 
 async function close(ctx) {
@@ -230,5 +258,6 @@ module.exports = {
   savedValue,
   readClaudeSettings,
   launch,
+  mainWindow,
   close,
 };

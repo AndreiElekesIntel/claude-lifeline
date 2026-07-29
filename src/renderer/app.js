@@ -1926,6 +1926,7 @@ const SETTINGS_SECTIONS = [
   ['setAnalytics', 'Analytics & cost'],
   ['setNotify', 'Notifications'],
   ['setAppearance', 'Appearance'],
+  ['setWidgets', 'Desktop widgets'],
   ['setScope', 'Project scope'],
   ['setAdvanced', 'Advanced'],
 ];
@@ -2045,6 +2046,7 @@ function renderSettings() {
     )
   );
 
+  renderWidgetSettings();
   renderScope();
 
   const adv = $('#advancedToggles');
@@ -2092,6 +2094,305 @@ function renderSettingsNav() {
       setTimeout(() => target.classList.remove('flash'), 1200);
     });
     host.appendChild(btn);
+  }
+}
+
+/* ========================== desktop widgets ============================= */
+
+/**
+ * The two widgets, and what each is for.
+ *
+ * Described here rather than in the markup because the cards are generated: two
+ * hand-written blocks of the same eleven controls would be two sets of ids to keep
+ * in step, and the differences between the widgets are three lines of data.
+ */
+const WIDGET_COPY = [
+  [
+    'shortcuts',
+    'Shortcuts',
+    'Your Launchpad presets as a floating strip of buttons. One click starts the session.',
+  ],
+  [
+    'status',
+    'Status',
+    'Whether Lifeline is running, what it is protecting, and anything that has gone wrong.',
+  ],
+];
+
+/**
+ * Theme swatches, previewing themselves.
+ *
+ * The colours are the panel colours from widget.css rather than arbitrary chips, so
+ * the swatch is a sample of what the widget will look like. Duplicated here because
+ * this stylesheet has no access to that one — and the alternative, a swatch that
+ * does not match its theme, is worse than a duplicated hex.
+ */
+const WIDGET_THEME_SWATCHES = [
+  ['system', 'linear-gradient(135deg, #0f1117 50%, #f6f7fb 50%)', 'Match Windows'],
+  ['dark', '#151823', 'Dark'],
+  ['light', '#ffffff', 'Light'],
+  ['midnight', '#080a12', 'Midnight'],
+  ['slate', '#2a2f3b', 'Slate'],
+  ['glass', 'linear-gradient(135deg, #ffffff59, #12161f8c)', 'Glass'],
+];
+
+const WIDGET_ACCENT_SWATCHES = [
+  ['violet', '#7c5cff'],
+  ['blue', '#3b82f6'],
+  ['emerald', '#10b981'],
+  ['amber', '#f59e0b'],
+];
+
+/**
+ * The shapes a widget can take, per widget.
+ *
+ * A look is a different widget, not a different colour: the card is the full
+ * readout, the bar is one strip for the top of a screen, and the orb is the mark
+ * with a single number on it. The shortcuts widget has no orb, because a disc
+ * holding three buttons would either hide two of them or stop being a disc —
+ * enforced in widgets.js as well, so a hand-edited config cannot produce one.
+ */
+const WIDGET_LOOK_OPTIONS = {
+  shortcuts: [
+    ['card', 'Card', 'A stacked list of your shortcuts.'],
+    ['bar', 'Bar', 'One horizontal strip of buttons.'],
+  ],
+  status: [
+    ['card', 'Card', 'Status, counts, and anything wrong.'],
+    ['bar', 'Bar', 'One horizontal strip, for the top of a screen.'],
+    ['orb', 'Orb', 'Just the mark and one number.'],
+  ],
+};
+
+/**
+ * The look picker: named buttons with a diagram, not swatches.
+ *
+ * A 17px colour chip cannot show the difference between a card and a bar. The glyph
+ * carries the shape and the word carries the meaning, which is also what makes this
+ * usable without colour.
+ */
+function lookRow(id, current, onPick) {
+  const row = el('div', 'widget-row');
+  row.appendChild(el('span', 'widget-row-label', 'Look'));
+  const host = el('div', 'widget-looks');
+  for (const [value, label, title] of WIDGET_LOOK_OPTIONS[id] || WIDGET_LOOK_OPTIONS.status) {
+    const btn = el('button', 'widget-look');
+    btn.type = 'button';
+    btn.dataset.value = value;
+    btn.title = title;
+    btn.setAttribute('aria-pressed', String(value === (current || 'card')));
+    const glyph = el('span', 'widget-look-glyph');
+    glyph.dataset.look = value;
+    btn.appendChild(glyph);
+    btn.appendChild(el('span', null, label));
+    btn.addEventListener('click', () => onPick(value));
+    host.appendChild(btn);
+  }
+  row.appendChild(host);
+  return row;
+}
+
+/**
+ * A row of swatches acting as a single choice.
+ *
+ * Buttons with aria-pressed rather than radios, because the control is a colour and
+ * a radio's own dot would sit on top of the colour it is selecting. The chosen one
+ * is marked with a ring in CSS.
+ */
+function swatchRow(label, options, current, onPick) {
+  const row = el('div', 'widget-row');
+  row.appendChild(el('span', 'widget-row-label', label));
+  const host = el('div', 'widget-swatches');
+  for (const [value, background, title] of options) {
+    const btn = el('button', 'widget-swatch');
+    btn.type = 'button';
+    btn.dataset.value = value;
+    btn.style.background = background;
+    btn.title = title || value;
+    btn.setAttribute('aria-label', title || value);
+    btn.setAttribute('aria-pressed', String(value === current));
+    btn.addEventListener('click', () => onPick(value));
+    host.appendChild(btn);
+  }
+  row.appendChild(host);
+  return row;
+}
+
+/**
+ * Whether one of the widget sliders is being dragged right now.
+ *
+ * Each drag step saves config, which comes back as `config-changed` and rebuilds
+ * this group — replacing the very element the pointer is holding, so the drag ends
+ * after one step. The same hazard `editingPreset` guards against, in a form that
+ * cannot be solved by not re-rendering on a poll: here the render is caused by the
+ * drag itself.
+ */
+let draggingWidgetSlider = false;
+
+/** A slider with its value shown, since a bare slider says nothing about where it is. */
+function sliderRow(label, { min, max, step = 1, value, format, onInput }) {
+  const row = el('div', 'widget-row');
+  row.appendChild(el('span', 'widget-row-label', label));
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  const readout = el('span', 'widget-row-value', format(value));
+  // On `input`, not `change`: these change something visible on screen, and the
+  // point of dragging one is watching the widget follow.
+  input.addEventListener('input', () => {
+    readout.textContent = format(Number(input.value));
+    onInput(Number(input.value));
+  });
+  // pointerdown/up rather than mousedown/up, so a touch or pen drag is covered
+  // too. `pointercancel` matters: without it a drag interrupted by the OS would
+  // leave the flag set and the group would stop updating for good.
+  input.addEventListener('pointerdown', () => {
+    draggingWidgetSlider = true;
+  });
+  for (const event of ['pointerup', 'pointercancel']) {
+    input.addEventListener(event, () => {
+      draggingWidgetSlider = false;
+    });
+  }
+  // A keyboard user moves the same slider with the arrow keys, which fires `input`
+  // without any pointer event at all — so the flag has to be raised for that too,
+  // and lowered when the key comes up.
+  input.addEventListener('keydown', () => {
+    draggingWidgetSlider = true;
+  });
+  input.addEventListener('keyup', () => {
+    draggingWidgetSlider = false;
+  });
+  input.addEventListener('blur', () => {
+    draggingWidgetSlider = false;
+  });
+  row.appendChild(input);
+  row.appendChild(readout);
+  return row;
+}
+
+function checkRow(label, checked, onChange, hint) {
+  const wrap = el('div');
+  const row = el('label', 'widget-check');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = Boolean(checked);
+  input.addEventListener('change', () => onChange(input.checked));
+  row.appendChild(input);
+  row.appendChild(el('span', null, label));
+  wrap.appendChild(row);
+  if (hint) wrap.appendChild(el('div', 'widget-check-hint', hint));
+  return wrap;
+}
+
+/**
+ * Build both widget cards.
+ *
+ * Rebuilt wholesale on every renderSettings, which is safe here because none of
+ * these controls holds half-typed text — the risk renderSettings exists to avoid is
+ * re-creating a text input under the cursor, and there is not one. A slider being
+ * dragged is a real case, but a drag holds the pointer on an element that is
+ * replaced only when config changes, which is what the drag is doing anyway.
+ */
+function renderWidgetSettings() {
+  // Mid-drag the DOM is deliberately left alone — see draggingWidgetSlider. The
+  // values on screen are already the ones being saved, so skipping the rebuild
+  // costs nothing and keeps the pointer's grip on the slider.
+  if (draggingWidgetSlider) return;
+
+  const host = $('#widgetSettings');
+  const all = (state.config && state.config.widgets) || {};
+  host.replaceChildren();
+
+  for (const [id, title, desc] of WIDGET_COPY) {
+    const w = all[id] || {};
+    const card = el('div', 'widget-card');
+    card.dataset.widget = id;
+    card.dataset.enabled = String(Boolean(w.enabled));
+
+    const head = el('div', 'widget-card-head');
+    const text = el('div');
+    text.appendChild(el('div', 'widget-card-title', title));
+    text.appendChild(el('div', 'widget-card-desc', desc));
+    head.appendChild(text);
+    // The enable switch is the one control that stays at full strength when the
+    // widget is off, because it is the only one that does anything about that.
+    head.appendChild(switchControl(w.enabled, (v) => pushConfig(`widgets.${id}.enabled`, v)));
+    card.appendChild(head);
+
+    const body = el('div', 'widget-card-body');
+
+    // First, because it decides what the rest of the controls are for: the width
+    // slider does nothing to a bar or an orb, both of which have a fixed width.
+    body.appendChild(lookRow(id, w.look, (v) => pushConfig(`widgets.${id}.look`, v)));
+    body.appendChild(
+      swatchRow('Theme', WIDGET_THEME_SWATCHES, w.theme, (v) => pushConfig(`widgets.${id}.theme`, v))
+    );
+    body.appendChild(
+      swatchRow('Accent', WIDGET_ACCENT_SWATCHES, w.accent, (v) => pushConfig(`widgets.${id}.accent`, v))
+    );
+    body.appendChild(
+      sliderRow('Opacity', {
+        min: 35,
+        max: 100,
+        step: 5,
+        value: Math.round((w.opacity ?? 1) * 100),
+        format: (n) => `${n}%`,
+        onInput: (n) => pushConfig(`widgets.${id}.opacity`, n / 100),
+      })
+    );
+    // Only the card has a settable width. The bar and the orb are sized by their
+    // shape, so the slider would move and nothing would happen — which reads as a
+    // broken control rather than an inapplicable one.
+    if ((w.look || 'card') === 'card') {
+      body.appendChild(
+        sliderRow('Width', {
+          min: 180,
+          max: 520,
+          step: 10,
+          value: w.width ?? 260,
+          format: (n) => `${n}px`,
+          onInput: (n) => pushConfig(`widgets.${id}.width`, n),
+        })
+      );
+    }
+
+    const checks = el('div', 'widget-checks');
+    checks.appendChild(
+      checkRow('Always on top', w.alwaysOnTop !== false, (v) => pushConfig(`widgets.${id}.alwaysOnTop`, v))
+    );
+    checks.appendChild(
+      checkRow('Compact', Boolean(w.compact), (v) => pushConfig(`widgets.${id}.compact`, v), 'Fewer details, less space.')
+    );
+    // Only the status widget: a panel of buttons that ignores clicks is a panel of
+    // buttons that cannot be pressed.
+    if (id === 'status') {
+      checks.appendChild(
+        checkRow('Click through', Boolean(w.clickThrough), (v) => pushConfig(`widgets.${id}.clickThrough`, v), 'Clicks pass to the window behind. You will not be able to drag it until you turn this off.')
+      );
+    }
+    body.appendChild(checks);
+
+    const foot = el('div', 'widget-foot');
+    // Shown because the reset button below is meaningless without it: "reset
+    // position" on a widget with no saved position does nothing, and this is what
+    // says which case you are in.
+    foot.appendChild(
+      el('span', 'widget-where', w.x === null || w.x === undefined ? 'Default position' : `At ${Math.round(w.x)}, ${Math.round(w.y)}`)
+    );
+    const reset = el('button', 'btn ghost small', 'Reset position');
+    reset.addEventListener('click', async () => {
+      const res = await api.resetWidgetPosition(id);
+      toast(res && res.ok ? `${title} widget moved back to its default corner.` : 'Could not move the widget.', res && res.ok ? 'ok' : 'danger');
+    });
+    foot.appendChild(reset);
+    body.appendChild(foot);
+
+    card.appendChild(body);
+    host.appendChild(card);
   }
 }
 

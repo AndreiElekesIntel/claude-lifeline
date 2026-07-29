@@ -74,6 +74,17 @@ contextBridge.exposeInMainWorld('lifeline', {
   /** Skill names found in ~/.claude/skills, to offer in the preset editor. */
   listSkills: () => ipcRenderer.invoke('list-skills'),
 
+  /**
+   * Forget a widget's remembered position.
+   *
+   * The only widget channel the main window needs: everything else about a widget
+   * is a config field and goes through saveConfig like any other setting. This one
+   * is separate because clearing the position is not just a write — the window has
+   * to be rebuilt to be re-placed, since applying settings to an open widget
+   * deliberately leaves its position alone.
+   */
+  resetWidgetPosition: (id) => ipcRenderer.invoke('reset-widget-position', id),
+
   onState: (cb) => {
     const h = (_e, state) => cb(state);
     ipcRenderer.on('state', h);

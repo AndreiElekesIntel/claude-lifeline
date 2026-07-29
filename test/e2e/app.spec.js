@@ -1009,9 +1009,18 @@ test('settings are grouped, and the jump list scrolls to each group', async () =
   const { page } = ctx;
   await page.click('.nav-item[data-tab="settings"]');
 
-  // One entry per group: the page was previously one long undifferentiated list.
+  /**
+   * One entry per group — counted from the page rather than hardcoded.
+   *
+   * The point of the assertion is that the jump list and the groups stay in step; a
+   * literal count only tested that, and failed whenever a group was added (which is
+   * how the Desktop widgets group broke it). Comparing the two counts keeps the real
+   * invariant and needs no edit next time.
+   */
   const items = page.locator('#settingsNav .settings-nav-item');
-  await expect(items).toHaveCount(8);
+  // Scoped to the settings tab: `.settings-group` is also used on Coverage and
+  // About, so an unscoped count would be a much larger number that means nothing.
+  await expect(items).toHaveCount(await page.locator('.tab[data-tab="settings"] .settings-group').count());
   await expect(items.first()).toHaveText('Installation');
 
   await items.filter({ hasText: 'Analytics & cost' }).click();

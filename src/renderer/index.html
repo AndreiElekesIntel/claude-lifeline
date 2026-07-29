@@ -843,6 +843,22 @@
             <div class="toggle-list" id="windowToggles"></div>
           </div>
 
+          <div class="settings-group" id="setWidgets">
+            <div class="group-head">
+              <div>
+                <h2>Desktop widgets</h2>
+                <p class="group-hint">
+                  Small always-there panels that float on the desktop: your shortcuts, and Lifeline's status. Drag one by
+                  its header to move it. Both are also in the tray menu — which is how to get a widget back if you lose
+                  it behind something.
+                </p>
+              </div>
+            </div>
+            <!-- Built in app.js: two identical blocks of controls, one per widget,
+                 and a duplicated set of ids in the markup would be a bug. -->
+            <div class="widget-settings" id="widgetSettings"></div>
+          </div>
+
           <div class="settings-group" id="setScope">
             <div class="group-head">
               <div>

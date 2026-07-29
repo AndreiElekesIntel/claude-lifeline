@@ -14,7 +14,7 @@ This wiki is the long-form documentation. The [README](https://github.com/Andrei
 | **[How It Works](How-It-Works)** | The `StopFailure` hook, exit code 2, and why nothing has to be running |
 | **[What It Recovers From](What-It-Recovers-From)** | All ten failure classes, what happens to each, and why |
 | **[Safety](Safety)** | The four limits that make auto-resume unable to spin |
-| **[The App](The-App)** | Every tab, with screenshots |
+| **[The App](The-App)** | Every tab and both desktop widgets, with screenshots |
 | **[Install and Uninstall](Install-and-Uninstall)** | Full install reference, verification, SmartScreen, autostart |
 | **[Configuration](Configuration)** | Every config key, and where each file lives on disk |
 | **[Extras](Extras)** | `npm run pin`, and shutting the machine down when work is finished |

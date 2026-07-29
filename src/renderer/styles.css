@@ -781,6 +781,9 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 #setAnalytics { --rail: var(--info); }
 #setNotify    { --rail: var(--hue-violet); }
 #setAppearance { --rail: var(--hue-pink); }
+/* Paired with Appearance, because that is what a widget's theme belongs to — the
+   accent shifts it enough to read as its own group in the jump list. */
+#setWidgets   { --rail: var(--accent); }
 #setScope     { --rail: var(--hue-teal); }
 #setAdvanced  { --rail: var(--text-faint); }
 /* Every group heading, wherever it sits in the header markup.
@@ -1282,5 +1285,90 @@ button.path-row:hover .path-open, button.path-row:focus-visible .path-open { opa
    removing it silently would make the shortcut quietly do less than it says. */
 .skill-chip.missing { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); text-decoration: line-through; }
 .skill-chip input { accent-color: var(--accent); margin: 0; }
+
+/* ---------- Desktop widget settings ----------
+   Two cards, one per widget, each with its own enable switch and appearance
+   controls. Side by side rather than stacked so the two are comparable — they are
+   the same set of choices twice, and the differences (the status widget's
+   click-through) read as differences rather than as a longer list. */
+.widget-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+.widget-card {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.widget-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.widget-card-title { font-size: 13.5px; font-weight: 600; }
+.widget-card-desc { margin-top: 1px; font-size: 12px; color: var(--text-dim); }
+
+/* Everything except the enable switch dims when the widget is off. Still
+   interactive: setting a theme before turning it on is reasonable, and disabling
+   the controls would mean the only way to configure a widget is to make it appear
+   on screen first. */
+.widget-card-body { display: flex; flex-direction: column; gap: 11px; transition: opacity 0.2s var(--ease); }
+.widget-card[data-enabled="false"] .widget-card-body { opacity: 0.55; }
+
+.widget-row { display: flex; align-items: center; gap: 10px; min-height: 26px; }
+.widget-row-label { flex: none; width: 74px; font-size: 12px; font-weight: 550; color: var(--text-dim); }
+/* 20px tall, not the browser's 16: a slider is dragged, and the layout suite holds
+   every control to a 20px minimum hit box for exactly this reason. */
+.widget-row input[type="range"] { flex: 1; min-width: 0; height: 20px; accent-color: var(--accent); }
+.widget-row-value { flex: none; width: 42px; font-size: 11.5px; color: var(--text-faint); text-align: right; font-variant-numeric: tabular-nums; }
+
+.widget-swatches { display: flex; flex-wrap: wrap; gap: 5px; }
+.widget-swatch {
+  width: 24px; height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.widget-swatch:hover { border-color: var(--text-dim); }
+.widget-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A ring rather than a border colour: some of these swatches are themselves close
+   to the border colour, so a border change would be invisible on exactly the ones
+   that need it most. */
+.widget-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); border-color: transparent; }
+
+/* The look picker. Named buttons rather than swatches: a 24px chip cannot show the
+   difference between a card and a bar, and the glyph carries the shape so the
+   choice is not colour-dependent. */
+.widget-looks { display: flex; flex-wrap: wrap; gap: 6px; }
+.widget-look {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.widget-look:hover { color: var(--text); border-color: var(--accent); }
+.widget-look:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.widget-look[aria-pressed="true"] { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent); }
+/* A diagram of the shape, drawn in currentColor so it follows the pressed state. */
+.widget-look-glyph { flex: none; width: 12px; height: 12px; border: 1.4px solid currentColor; opacity: 0.85; }
+.widget-look-glyph[data-look="card"] { border-radius: 2px; }
+.widget-look-glyph[data-look="bar"] { height: 5px; border-radius: 2px; }
+.widget-look-glyph[data-look="orb"] { border-radius: 999px; }
+
+.widget-checks { display: flex; flex-direction: column; gap: 4px; }
+.widget-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+/* A native checkbox renders at 13px, which is a small target for a mouse and below
+   the 20px floor the layout suite enforces. Sized up rather than wrapped in a hit
+   area, so the box the user aims at is the box they can see. */
+.widget-check input { width: 20px; height: 20px; flex: none; accent-color: var(--accent); margin: 0; cursor: pointer; }
+.widget-check-hint { font-size: 11.5px; color: var(--text-faint); }
+
+.widget-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.widget-where { font-size: 11.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 
 .hidden { display: none !important; }

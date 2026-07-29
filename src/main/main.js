@@ -11,7 +11,7 @@
  * process — quitting the tray leaves every session protected.
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, Notification, shell, dialog, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, Notification, shell, dialog, globalShortcut, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -30,6 +30,8 @@ const launcher = require('../shared/launcher');
 const launchpad = require('../shared/launchpad');
 const sessionRename = require('../shared/session-rename');
 const history = require('../shared/history');
+const widgets = require('../shared/widgets');
+const widgetWindows = require('./widget-windows');
 
 const isDev = process.argv.includes('--dev');
 /**
@@ -118,6 +120,162 @@ function showWindow(tab = null) {
   win.focus();
 }
 
+/* =============================== widgets ================================= */
+
+/**
+ * Open, update, or close both widgets to match config.
+ *
+ * Called from one place per reason it could change — startup, a config save, and a
+ * widget's own patch — rather than on the monitor poll. `sync` is idempotent, so
+ * calling it too often is harmless; the reason not to put it on the poll is that a
+ * poll fires every five seconds forever, and re-applying `setAlwaysOnTop` on a
+ * timer is a good way to steal a raise from whatever the user just clicked.
+ */
+function syncWidgets(cfg = loadConfig()) {
+  const all = widgets.listWidgets(cfg);
+  for (const id of widgets.WIDGET_IDS) {
+    widgetWindows.sync(id, all[id], {
+      state: () => widgetState(id),
+      savePosition: saveWidgetPosition,
+    });
+  }
+}
+
+/**
+ * Remember where a widget was dragged to.
+ *
+ * Reached from the debounced `move` handler, so it re-reads config rather than
+ * patching a copy held from earlier: a drag can finish long after the last save,
+ * and writing a stale object back would undo whatever was changed in between.
+ *
+ * Deliberately does *not* call syncWidgets. The window is already at these
+ * coordinates — it is where the user put it — and pushing them back through
+ * `setPosition` would fight a drag that is still in progress.
+ */
+function saveWidgetPosition(id, { x, y }) {
+  const cfg = loadConfig();
+  const res = widgets.patchWidget(cfg, id, { x, y });
+  if (!res.ok) return;
+  cfg.widgets = res.widgets;
+  saveConfig(cfg);
+  // The settings UI shows the position, so it has to hear about a drag.
+  if (win) win.webContents.send('config-changed', cfg);
+}
+
+/**
+ * What a widget needs to draw itself.
+ *
+ * Built per widget rather than sending one shared blob, because the two need
+ * almost disjoint slices: the shortcuts panel wants presets and nothing else, and
+ * the status widget wants counts and alerts. It also keeps the sessions array —
+ * which carries cwds and transcript paths — out of a window that has no use for it.
+ */
+function widgetState(id) {
+  const state = monitor.getState();
+
+  /**
+   * The app's own mark, drawn at runtime in the tray's status colour.
+   *
+   * Sent to both widgets, and as a data URL rather than a file: the icon is
+   * generated, not shipped, and its colour *is* the status — so a widget showing it
+   * is showing something a static asset could not. The CSP allows `data:` images for
+   * exactly this. Two sizes because the orb is nearly all logo and the card's grip
+   * has 18px for one; scaling a 64px PNG down to 18 is soft where redrawing it is
+   * not, and both are cached in tray-icon.js.
+   */
+  const logo = {
+    small: iconDataUrl(36, state.status),
+    large: iconDataUrl(96, state.status),
+  };
+
+  if (id === 'shortcuts') {
+    return {
+      logo,
+      status: state.status,
+      presets: launchpad.listPresets(loadConfig()).map((p) => ({
+        id: p.id,
+        label: p.label,
+        accelerator: p.accelerator || null,
+        /** The one-line detail, built where the desktop shortcut's tooltip is. */
+        description: launchpad.describe(p),
+        subtitle: presetSubtitle(p),
+      })),
+    };
+  }
+
+  return {
+    logo,
+    status: state.status,
+    summary: state.summary,
+    stats: state.stats,
+    lastPollAt: state.lastPollAt,
+    /**
+     * Whether recovery is actually wired up.
+     *
+     * The one setup fact worth a permanent line on the widget: with the hooks
+     * missing, every count on it can look healthy while nothing at all is
+     * protected. Read from installer rather than config, because config records
+     * the intent and settings.json records the reality.
+     */
+    hooksInstalled: hooksComplete(),
+    alerts: widgetAlerts(state),
+  };
+}
+
+/** A short second line for a preset chip: where it runs, and as what. */
+function presetSubtitle(preset) {
+  const bits = [];
+  if (preset.cwd) bits.push(path.basename(String(preset.cwd).replace(/[\\/]+$/, '')) || preset.cwd);
+  if (preset.skills && preset.skills.length) bits.push(preset.skills.map((s) => `/${s}`).join(' '));
+  else if (preset.model) bits.push(preset.model);
+  return bits.join(' · ');
+}
+
+function hooksComplete() {
+  try {
+    return installer.status().complete;
+  } catch {
+    // Unreadable settings.json is not the same as "not installed", so it does not
+    // claim either way — the banner in the main window explains that case.
+    return true;
+  }
+}
+
+/**
+ * The "any errors?" part of the status widget.
+ *
+ * Attention items first, because those are the ones that will not resolve on their
+ * own, then recent errors from the log. Capped at three: this is a widget, and a
+ * scrolling list of problems in a corner of the desktop is a list nobody reads.
+ */
+function widgetAlerts(state) {
+  const out = [];
+  const seen = new Set();
+
+  const push = (event, tone) => {
+    const text = event.detail || event.label || event.errorClass || 'Something went wrong.';
+    // Same detail twice — a failure that recurs on a loop — is one line, not five.
+    if (seen.has(text)) return;
+    seen.add(text);
+    out.push({ tone, text: String(text).slice(0, 300), at: event.at || null });
+  };
+
+  for (const item of state.attention || []) push(item, item.kind === eventlog.KINDS.BLOCKED ? 'danger' : 'warn');
+  for (const event of state.events || []) {
+    if (out.length >= 3) break;
+    if (event.kind !== eventlog.KINDS.ERROR) continue;
+    // Older than an hour is history rather than status; the Activity tab has it.
+    if (Date.now() - event.at > 3_600_000) continue;
+    push(event, 'danger');
+  }
+
+  if (!state.config.enabled) {
+    out.unshift({ tone: 'warn', text: 'Protection is paused — no session will be recovered.', at: null });
+  }
+
+  return out.slice(0, 3);
+}
+
 function buildTrayMenu() {
   const state = monitor.getState();
   const st = installer.status();
@@ -140,6 +298,23 @@ function buildTrayMenu() {
     { label: 'Open dashboard', click: () => showWindow('dashboard') },
     { label: 'Open config', click: () => showWindow('settings') },
     { label: 'Activity log', click: () => showWindow('activity') },
+    {
+      /**
+       * Widget toggles, in the tray.
+       *
+       * Not only in Settings, because a widget can be turned off from a place the
+       * user cannot get back to. Set click-through on the status widget and it stops
+       * accepting the click that would turn it off again; the tray is the way out,
+       * and it is also the fastest way to put one back after hiding it.
+       */
+      label: 'Desktop widgets',
+      submenu: widgets.WIDGET_IDS.map((id) => ({
+        label: id === 'status' ? 'Status widget' : 'Shortcuts widget',
+        type: 'checkbox',
+        checked: widgets.widgetSettings(state.config, id).enabled,
+        click: () => toggleWidget(id),
+      })),
+    },
     { type: 'separator' },
     {
       label: state.config.enabled ? 'Pause protection' : 'Resume protection',
@@ -191,6 +366,28 @@ function buildTrayMenu() {
   ]);
 }
 
+/**
+ * Turn a widget on or off, from the tray or anywhere else.
+ *
+ * One function rather than an inline handler because both the tray and the
+ * widget's own close button end here, and the ordering matters: config is written
+ * first so that a `sync` reads the state that was just saved, and the tray is
+ * rebuilt last so its checkmark reflects what happened rather than what was asked.
+ */
+function toggleWidget(id, enabled = null) {
+  const cfg = loadConfig();
+  const current = widgets.widgetSettings(cfg, id);
+  const next = enabled === null ? !current.enabled : Boolean(enabled);
+  const res = widgets.patchWidget(cfg, id, { enabled: next });
+  if (!res.ok) return false;
+  cfg.widgets = res.widgets;
+  saveConfig(cfg);
+  syncWidgets(cfg);
+  refreshTray();
+  if (win) win.webContents.send('config-changed', cfg);
+  return next;
+}
+
 function refreshTray() {
   if (!tray) return;
   const state = monitor.getState();
@@ -238,6 +435,12 @@ app.whenReady().then(() => {
   monitor.on('update', (state) => {
     refreshTray();
     if (win) win.webContents.send('state', serialisableState(state));
+    // The status widget's whole job is being current, so it hears every poll. Sent
+    // per widget rather than broadcast with one payload, because the two get
+    // different slices — see widgetState.
+    for (const id of widgets.WIDGET_IDS) {
+      if (widgetWindows.isOpen(id)) widgetWindows.send(id, 'widget-state', widgetState(id));
+    }
     notifyRecovery(state);
   });
 
@@ -265,6 +468,26 @@ app.whenReady().then(() => {
   // Launchpad hotkeys are global, so they work whether or not the window is open —
   // which is the point of a shortcut you press instead of going to find a button.
   registerPresetShortcuts();
+  // Both off unless the user turned them on, so on most machines this does nothing.
+  syncWidgets(cfg);
+
+  /**
+   * Re-place the widgets when the display layout changes.
+   *
+   * This is the case the placement logic exists for: undock the laptop and a widget
+   * that was on the second monitor is at coordinates that no longer exist. It has no
+   * taskbar button and no alt-tab entry, so there is no way for the user to go and
+   * find it — the app has to notice. `sync` alone would not do it, because the
+   * window is already open and `apply` does not touch position, so the widgets are
+   * closed and rebuilt, which sends them back through placeOn.
+   */
+  for (const event of ['display-removed', 'display-added', 'display-metrics-changed']) {
+    screen.on(event, () => {
+      const current = loadConfig();
+      widgetWindows.closeAll();
+      syncWidgets(current);
+    });
+  }
 
   if (!cfg.ui.startMinimised || isDev || isE2E) showWindow('dashboard');
 });
@@ -343,6 +566,20 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   quitting = true;
   if (monitor) monitor.stop();
+  /**
+   * Widgets close with the app.
+   *
+   * They have no `close` guard of their own, so without this they would be
+   * destroyed by Electron anyway — but that skips the debounced position save. A
+   * widget dragged and then quit within the debounce window would forget where it
+   * was put, which is the one thing a widget is expected to remember.
+   */
+  for (const id of widgets.WIDGET_IDS) {
+    if (!widgetWindows.isOpen(id)) continue;
+    const pos = widgetWindows.position(id);
+    if (pos) saveWidgetPosition(id, pos);
+  }
+  widgetWindows.closeAll();
 });
 
 /** Trim the state to what the UI renders; transcripts and paths stay in main. */
@@ -453,6 +690,10 @@ ipcMain.handle('save-config', (_e, patch) => {
   const cfg = saveConfig(deepMerge(loadConfig(), patch));
   monitor.poll();
   refreshTray();
+  // Unconditional rather than only when the patch mentions widgets: `sync` is
+  // idempotent, and a check on the patch shape is one more thing to get wrong than
+  // a call that costs nothing when nothing changed.
+  syncWidgets(cfg);
   if (win) win.webContents.send('config-changed', cfg);
   return cfg;
 });
@@ -461,6 +702,9 @@ ipcMain.handle('reset-config', () => {
   const cfg = saveConfig(defaultConfig());
   monitor.poll();
   refreshTray();
+  // Defaults have both widgets off, so this closes them — which is the right
+  // reading of "reset to defaults" even though it makes two windows disappear.
+  syncWidgets(cfg);
   return cfg;
 });
 
@@ -905,6 +1149,118 @@ function registerPresetShortcuts() {
     }
   }
 }
+
+/* ============================= widget IPC ================================ */
+
+/**
+ * A widget's id, taken from the window rather than from the message.
+ *
+ * Every widget channel could just trust the id the renderer sends — it comes from
+ * the query string main itself put there. Attributing it to the sending webContents
+ * instead means a widget can only ever change its own settings and its own height,
+ * which keeps the two windows genuinely independent rather than independent by
+ * convention.
+ */
+function widgetIdOf(event, claimed) {
+  const actual = widgetWindows.idFor(event.sender);
+  if (actual) return actual;
+  // Under a test that drives the page directly there is no registered window; the
+  // claimed id is still checked against the known set before it is used.
+  return widgets.WIDGET_IDS.includes(claimed) ? claimed : null;
+}
+
+/**
+ * First paint. Returns everything the renderer needs and reveals the window.
+ *
+ * The reveal happens here rather than at create time because a transparent
+ * frameless window shown before its first paint flashes black — and a widget sits
+ * on top of everything, so that flash is about as visible as a flash can be.
+ */
+ipcMain.handle('widget-ready', (event, id) => {
+  const widgetId = widgetIdOf(event, id);
+  if (!widgetId) return null;
+  widgetWindows.reveal(widgetId);
+  return {
+    settings: widgets.widgetSettings(loadConfig(), widgetId),
+    state: widgetState(widgetId),
+  };
+});
+
+/** The height the content measured. Clamped in widget-windows. */
+ipcMain.handle('widget-height', (event, id, px) => {
+  const widgetId = widgetIdOf(event, id);
+  if (!widgetId) return false;
+  widgetWindows.setHeight(widgetId, px);
+  return true;
+});
+
+/**
+ * A settings change made from the widget's own popover.
+ *
+ * Normalised by widgets.js on the way in, then applied and echoed back — so a
+ * value the renderer optimistically applied and main rejected corrects itself
+ * rather than persisting only in the DOM.
+ */
+ipcMain.handle('widget-patch', (event, id, patch) => {
+  const widgetId = widgetIdOf(event, id);
+  if (!widgetId) return null;
+
+  const cfg = loadConfig();
+  const res = widgets.patchWidget(cfg, widgetId, patch);
+  if (!res.ok) return null;
+  cfg.widgets = res.widgets;
+  saveConfig(cfg);
+  syncWidgets(cfg);
+  // The Settings tab shows the same values, so it hears about a change made from
+  // the widget — otherwise the two disagree until the tab is reopened.
+  if (win) win.webContents.send('config-changed', cfg);
+  return res.settings;
+});
+
+/**
+ * The widget's own close button.
+ *
+ * Turns the widget *off* rather than merely hiding the window: a hidden widget with
+ * `enabled: true` would come back on the next sync, and the close button on a
+ * desktop widget means "I do not want this", not "not now". The tray and Settings
+ * both put it back.
+ */
+ipcMain.handle('widget-hide', (event, id) => {
+  const widgetId = widgetIdOf(event, id);
+  if (!widgetId) return false;
+  toggleWidget(widgetId, false);
+  return true;
+});
+
+/** Bring the main window up on a named tab. A key, never a path. */
+ipcMain.handle('widget-open-main', (_e, tab) => {
+  const tabs = ['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about'];
+  showWindow(tabs.includes(tab) ? tab : 'dashboard');
+  return true;
+});
+
+/**
+ * Forget a widget's saved position.
+ *
+ * For the case the placement logic cannot fix on its own: a widget the user has
+ * lost track of, on a layout where it is technically visible. Clearing the
+ * coordinates and reopening sends it back through placeOn's default corner.
+ */
+ipcMain.handle('reset-widget-position', (_e, id) => {
+  if (!widgets.WIDGET_IDS.includes(id)) return { ok: false };
+  const cfg = loadConfig();
+  const res = widgets.patchWidget(cfg, id, { x: null, y: null });
+  if (!res.ok) return { ok: false, reason: res.reason };
+  cfg.widgets = res.widgets;
+  saveConfig(cfg);
+  // Closed and rebuilt rather than synced: `apply` deliberately does not move a
+  // window that is already open, so a reset would otherwise take effect only at
+  // the next launch.
+  widgetWindows.close(id);
+  syncWidgets(cfg);
+  if (win) win.webContents.send('config-changed', cfg);
+  return { ok: true };
+});
 
 ipcMain.on('window-control', (_e, action) => {
   if (!win) return;

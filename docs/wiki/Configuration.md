@@ -30,6 +30,13 @@ A corrupt or missing file **falls back to defaults rather than throwing** — a 
     "enabled": true,                   // read transcripts for time/token/cost reporting
     "rates": {}                        // per-model overrides, USD per million tokens
   },
+  "launchpad": {
+    "presets": []                      // saved one-click sessions; see below
+  },
+  "widgets": {
+    "shortcuts": { "enabled": false, "look": "card" },
+    "status":    { "enabled": false, "look": "card" }
+  },
   "hooks": {
     "autoInstall": true                // register missing hooks at startup
   },
@@ -44,6 +51,43 @@ A corrupt or missing file **falls back to defaults rather than throwing** — a 
 The four `limits` that matter for runaway protection are explained on [Safety](Safety). The `features` toggles map to the checks listed on [What It Recovers From](What-It-Recovers-From).
 
 `analytics.rates` exists because cost here is tokens × published rate, which is not what a subscription bills — override the rates to match whatever you actually pay.
+
+### `launchpad.presets`
+
+One entry per saved session. Everything except `id` and `label` is optional — an entry with only those two opens a plain session in your home directory.
+
+```jsonc
+{
+  "id": "a1b2c3",                          // generated; do not reuse one
+  "label": "Morning triage",
+  "cwd": "C:/work/payments-api",
+  "model": "opus",                         // opus | sonnet | haiku, or omit for the default
+  "permissionMode": "plan",                // manual | auto | acceptEdits | dontAsk | plan | bypassPermissions
+  "skills": ["code-review"],               // loaded as /code-review before the prompt
+  "prePrompt": "Read the overnight CI failures.",
+  "accelerator": "CommandOrControl+Alt+1"  // global hotkey
+}
+```
+
+The field is `prePrompt`, not `prompt` — a `prompt` key is dropped on load and the preset launches silently with no opening message.
+
+### `widgets`
+
+Both widgets take the same keys, and both are `enabled: false` until you ask for one.
+
+| Key | |
+|---|---|
+| `enabled` | off by default; a window appearing on your desktop uninvited is not something an app should do |
+| `look` | `card`, `bar`, or — status only — `orb` |
+| `theme` / `accent` | `system`, `dark`, `light`, `midnight`, `slate`, `glass`; accents as elsewhere |
+| `width` | the **card** width, 180–520. The bar and orb have their own fixed sizes, so switching look and back does not lose what you chose here |
+| `opacity` | 0.35–1. The floor is deliberate: invisible is what `enabled: false` is for |
+| `alwaysOnTop` | on by default, because a widget that hides behind the editor is not a widget. Turn it off while screen-sharing |
+| `clickThrough` | the window ignores the mouse entirely. It then cannot be dragged or clicked either, so the off switch is also in the tray menu and in Settings |
+| `compact` | fewer details, less space |
+| `x` / `y` | where it was last dragged, or `null` for "wherever is sensible". Both or neither — half a coordinate is not a position |
+
+A saved `x`/`y` is a *request*, checked against the displays that exist at launch. If it is off every screen — a monitor was unplugged — the widget is pulled back somewhere reachable instead, because a widget has no taskbar button and no alt-tab entry, so off-screen means gone. Setting both to `null` (or **Reset position** in Settings) puts it back in its default corner.
 
 ## Where everything lives
 
