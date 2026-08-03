@@ -1,7 +1,7 @@
 # Development
 
 ```bash
-npm test             # 304 unit tests
+npm test             # 336 unit tests
 npm run test:e2e     # 114 Playwright tests against the real Electron app
 npm run lint         # project-specific invariant checks
 npm run screenshots  # regenerate docs/screenshots/
