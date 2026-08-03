@@ -993,37 +993,98 @@ function launcherNode() {
  * taken from whichever record matched rather than from the renderer, so a resume
  * cannot be redirected into a directory the user never had a session in.
  */
-ipcMain.handle('resume-session', (_e, sessionId) => {
+ipcMain.handle('resume-session', (_e, sessionId, opts = {}) => {
   const id = String(sessionId || '');
-  if (!launcher.SESSION_ID_RE.test(id)) return { ok: false, reason: 'That is not a session id.' };
+  if (!launcher.SESSION_ID_RE.test(id)) return { ok: false, code: 'bad_id', reason: 'That is not a session id.' };
 
   const live = monitor.getState().sessions.find((s) => s.sessionId === id);
   const transcript = sessionRename.findTranscript(id);
   if (!live && !transcript) {
-    return { ok: false, reason: 'Lifeline could not find that session on disk — its transcript may have been pruned.' };
-  }
-
-  /**
-   * Resuming a session that is still running is refused.
-   *
-   * `claude --resume` on a live session opens a second process against the same
-   * transcript, and both then append to it. That is exactly the interleaving
-   * session-rename.js refuses a rename for, except worse: this one keeps writing.
-   * The user's standing instruction is that Lifeline must not disturb ongoing work.
-   */
-  if (live && live.alive) {
-    return { ok: false, reason: 'That session is still running. Resuming it would start a second process writing to the same transcript.' };
+    return {
+      ok: false,
+      code: 'not_found',
+      reason: 'Lifeline could not find that session on disk — its transcript may have been pruned.',
+    };
   }
 
   // From the record, never from the renderer — see above.
   const cwd = (live && live.cwd) || (transcript ? cwdForTranscript(transcript) : null);
 
+  /**
+   * `--resume` is resolved relative to the working directory.
+   *
+   * Measured, not assumed: running `claude --resume <id>` from the wrong folder
+   * exits 1 with "No conversation found with session ID". Claude Code scopes the
+   * lookup to the project the session belongs to, so launching without a cwd
+   * would inherit the app's own directory and fail for every session that was not
+   * started there. Refusing up front beats opening a terminal that immediately
+   * dies with a message the user did not ask for.
+   */
+  if (!opts.fresh && !cwd) {
+    return {
+      ok: false,
+      code: 'no_cwd',
+      reason: 'Lifeline could not tell which folder this session belongs to, and --resume only works from its own project folder.',
+    };
+  }
+
+  /**
+   * A session that is still running gets a *different offer*, not a refusal.
+   *
+   * `claude --resume` against a live session opens a second process appending to
+   * the same transcript — two writers interleaving, which is the thing
+   * session-rename.js also refuses. So that stays refused.
+   *
+   * What changed is what happens next. This used to dead-end with an explanation,
+   * and because Claude Code keeps a session record alive for as long as the process
+   * is (19 live records on this machine, every one a genuine `claude.exe`), the
+   * refusal landed on exactly the recent rows a user is most likely to click — so
+   * History's Resume button looked broken. It was working as designed and the
+   * design was wrong.
+   *
+   * `fresh` is the way through: a *new* session in the same folder. That is safe —
+   * one process, one new transcript, nothing appending to the live one — and it is
+   * what someone reaching for a running session's folder almost always wants. The
+   * renderer offers it as a button on the refusal rather than doing it silently,
+   * because starting a second session is the user's call to make.
+   */
+  if (live && live.alive && !opts.fresh) {
+    return {
+      ok: false,
+      code: 'still_running',
+      /** Lets the renderer offer the alternative without a second round trip. */
+      canStartFresh: Boolean(cwd),
+      project: cwd ? path.basename(cwd) : null,
+      status: live.status || null,
+      reason: live.status === 'busy'
+        ? 'That session is still working. Opening it again would put two processes on the same transcript.'
+        : 'That session is still open in another window. Resuming it would put two processes on the same transcript.',
+    };
+  }
+
   try {
-    const res = launchSession({ resumeId: id, cwd: cwd || undefined, label: `Resume ${id.slice(0, 8)}` });
-    eventlog.append({ kind: eventlog.KINDS.INFO, detail: `Resumed session ${id.slice(0, 8)} in a new window.`, sessionId: id });
-    return { ok: true, via: res.via, spec: res.spec };
+    /**
+     * `fresh` deliberately omits `resumeId`: it is a new session that happens to
+     * share a folder, not a resume. Passing both would be the double-writer case
+     * this branch exists to avoid.
+     */
+    const fresh = Boolean(opts.fresh);
+    const res = launchSession({
+      resumeId: fresh ? undefined : id,
+      cwd: cwd || undefined,
+      label: fresh ? `New session in ${cwd ? path.basename(cwd) : 'project'}` : `Resume ${id.slice(0, 8)}`,
+    });
+    eventlog.append({
+      kind: eventlog.KINDS.INFO,
+      detail: fresh
+        ? `Started a new session in ${cwd || 'the default folder'}, alongside the one still running.`
+        : `Resumed session ${id.slice(0, 8)} in a new window.`,
+      sessionId: id,
+      cwd: cwd || null,
+    });
+    return { ok: true, fresh, via: res.via, spec: res.spec };
   } catch (err) {
-    return { ok: false, reason: err.message };
+    return { ok: false, code: 'launch_failed', reason: err.message };
   }
 });
 

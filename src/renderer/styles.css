@@ -1178,6 +1178,26 @@ button.path-row:hover .path-open, button.path-row:focus-visible .path-open { opa
   animation: toast-in 0.26s var(--ease);
 }
 .toast.out { animation: toast-out 0.2s var(--ease) forwards; }
+/* A toast offering a choice stacks its button under the text: an action label can
+   be a sentence fragment ("Start a new one in claude-lifeline"), and squeezing that
+   onto one row either truncates it or pushes the toast past its max-width. */
+.toast.has-action { flex-wrap: wrap; align-items: flex-start; }
+.toast.has-action .bar { min-height: 34px; }
+.toast-action {
+  margin-left: 13px;
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.toast-action:hover { background: var(--bg-hover, var(--bg-elev-2)); border-color: var(--accent); }
+.toast-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .toast .bar { width: 3px; align-self: stretch; border-radius: 99px; background: var(--accent); flex: none; }
 .toast.ok .bar { background: var(--ok); }
 .toast.warn .bar { background: var(--warn); }

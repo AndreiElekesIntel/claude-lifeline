@@ -51,7 +51,12 @@ contextBridge.exposeInMainWorld('lifeline', {
    * ids come from the analytics scan, which reads transcripts, so they are
    * model-authored text rather than something the app chose.
    */
-  resumeSession: (sessionId) => ipcRenderer.invoke('resume-session', sessionId),
+  /**
+   * `opts.fresh` asks for a new session in the session's folder instead of a
+   * resume — the way past a "still running" refusal without two processes ending
+   * up on one transcript. Main decides the folder either way.
+   */
+  resumeSession: (sessionId, opts) => ipcRenderer.invoke('resume-session', sessionId, opts || {}),
   /** Whether a rename is allowed *now*, so the UI can disable the control first. */
   canRenameSession: (sessionId) => ipcRenderer.invoke('can-rename-session', sessionId),
   renameSession: (sessionId, name) => ipcRenderer.invoke('rename-session', sessionId, name),

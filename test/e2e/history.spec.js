@@ -236,7 +236,7 @@ test('clicking a session resumes it, with the id and cwd taken from disk', async
   expect(spec.cwd).toBe('C:/work/payments-api');
 });
 
-test('resuming a session that is still running is refused, not queued', async () => {
+test('resuming a session that is still running is never queued behind it', async () => {
   const sandbox = launchSandbox('hist-resume-live');
   const id = 'a3f8c1d2-4b5e-4a91-8c3d-7e2f1b9a4c60';
   seedHistory(sandbox);
@@ -253,10 +253,49 @@ test('resuming a session that is still running is refused, not queued', async ()
   await row.locator('.hist-main').click();
 
   // A second process appending to a transcript the first one is writing is the
-  // interference this whole feature is built to avoid, so it is refused outright —
-  // and refused before anything is written, not after.
-  await expect(latestToast(page)).toContainText('still running');
+  // interference this whole feature is built to avoid, so the resume itself is
+  // refused — and refused before anything is written, not after.
+  await expect(latestToast(page)).toContainText('same transcript');
   expect([...launchSpecs()].filter((f) => !before.has(f))).toEqual([]);
+});
+
+/**
+ * The refusal above offers a way through, and takes it when asked.
+ *
+ * Claude Code keeps a session record alive for as long as its process is, so the
+ * "still running" branch lands on exactly the recent rows a user is most likely
+ * to click — which made History's Resume look broken even though it was working
+ * as designed. A new session in the same folder is the thing that was actually
+ * wanted, and it is safe: one process, one new transcript.
+ */
+test('a running session offers a fresh one in its folder, with no --resume', async () => {
+  const sandbox = launchSandbox('hist-resume-fresh');
+  const id = 'a3f8c1d2-4b5e-4a91-8c3d-7e2f1b9a4c60';
+  seedHistory(sandbox);
+  fx.writeSession(sandbox, { pid: process.pid, sessionId: id, cwd: 'C:/work/payments-api', status: 'busy' });
+  ctx = await launchApp(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="history"]');
+  const row = page.locator(`.hist-row[data-session-id="${id}"]`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+
+  const before = launchSpecs();
+  await row.locator('.hist-main').click();
+
+  // The alternative is offered on the refusal, not applied silently: starting a
+  // second session against a folder someone is working in is their call.
+  const action = latestToast(page).locator('.toast-action');
+  await expect(action).toContainText('payments-api');
+  await action.click();
+
+  // The critical assertion: a *new* session, so no --resume and no session id
+  // anywhere on the command line. Passing both would be the double-writer case
+  // the refusal exists to prevent.
+  const spec = await newLaunchSpec(before);
+  expect(spec.cwd).toBe('C:/work/payments-api');
+  expect(spec.args).not.toContain('--resume');
+  expect(spec.args.join(' ')).not.toContain(id);
 });
 
 test('a session id that is not on disk cannot reach a command line', async () => {

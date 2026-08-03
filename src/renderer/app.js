@@ -167,16 +167,42 @@ function projectName(cwd) {
   return parts[parts.length - 1] || cwd;
 }
 
-function toast(message, tone = 'info') {
+/**
+ * A transient message, optionally with one thing to do about it.
+ *
+ * `action` exists for refusals that have an obvious alternative — the case that
+ * forced it is History's Resume on a session that is still running, which used to
+ * explain the problem and leave the user with nowhere to go. A toast carrying the
+ * way forward turns that into a choice.
+ *
+ * An action holds the toast longer: 3.6s is enough to read a confirmation, not
+ * enough to read a refusal and decide on a button.
+ */
+function toast(message, tone = 'info', action = null) {
   const host = $('#toastHost');
-  const t = el('div', `toast ${tone}`);
+  const t = el('div', `toast ${tone}${action ? ' has-action' : ''}`);
   t.appendChild(el('div', 'bar'));
   t.appendChild(el('span', null, message));
-  host.appendChild(t);
-  setTimeout(() => {
+
+  let timer = null;
+  const dismiss = () => {
+    if (timer) clearTimeout(timer);
     t.classList.add('out');
     setTimeout(() => t.remove(), 220);
-  }, 3600);
+  };
+
+  if (action && action.label && typeof action.onClick === 'function') {
+    const btn = el('button', 'toast-action', action.label);
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      dismiss();
+      action.onClick();
+    });
+    t.appendChild(btn);
+  }
+
+  host.appendChild(t);
+  timer = setTimeout(dismiss, action ? 9000 : 3600);
 }
 
 /* ============================== theming =============================== */
@@ -1597,13 +1623,33 @@ function historyRow(s) {
   return row;
 }
 
-/** Ask main to reopen a session, and say what happened either way. */
-async function resumeSession(s, btn) {
+/**
+ * Ask main to reopen a session, and say what happened either way.
+ *
+ * `fresh` starts a new session in the same folder instead of resuming. It is only
+ * ever reached from the button on the "still running" refusal below — resuming a
+ * live session would put two processes on one transcript, but a *new* session
+ * beside it is safe and is usually what was wanted.
+ */
+async function resumeSession(s, btn, { fresh = false } = {}) {
   if (btn) btn.disabled = true;
   try {
-    const res = await api.resumeSession(s.sessionId);
-    if (res && res.ok) toast(`Opening ${sessionTitle(s)}…`, 'ok');
-    else toast((res && res.reason) || 'Could not resume that session.', 'warn');
+    const res = await api.resumeSession(s.sessionId, { fresh });
+    if (res && res.ok) {
+      toast(res.fresh ? `Starting a new session in ${projectName(s.cwd)}…` : `Opening ${sessionTitle(s)}…`, 'ok');
+      return;
+    }
+
+    // Still running: offer the safe alternative rather than stopping here.
+    if (res && res.code === 'still_running' && res.canStartFresh) {
+      toast(res.reason, 'warn', {
+        label: `Start a new one in ${res.project || projectName(s.cwd)}`,
+        onClick: () => resumeSession(s, btn, { fresh: true }),
+      });
+      return;
+    }
+
+    toast((res && res.reason) || 'Could not resume that session.', 'warn');
   } catch (err) {
     toast(`Could not resume: ${err.message}`, 'danger');
   } finally {
