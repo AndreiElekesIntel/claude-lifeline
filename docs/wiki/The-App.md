@@ -10,6 +10,8 @@ The app is optional. Recovery happens inside Claude Code's own process, so quitt
 
 Every Claude Code session on the machine, live — including what each one has cost so far.
 
+A dot beside each name answers the only question you usually have: **green** is finished and waiting for you, **violet and pulsing** is still working, **amber** claims to be working but has gone quiet, **red** died. The State column says the same thing in words; the dot is there so that with five terminals open you can tell which ones are done without reading any of them.
+
 Strictly read-only: it reads the JSON records Claude Code maintains and probes liveness with signal 0, which tests for a process without affecting it. **Watching your sessions can never disturb them.**
 
 ![Sessions](https://raw.githubusercontent.com/AndreiElekesIntel/claude-lifeline/main/docs/screenshots/sessions-dark.png)

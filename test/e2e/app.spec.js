@@ -67,6 +67,80 @@ test('a busy session drives the status to running and lists the project', async 
   await expect(row).toContainText('refactor-billing');
   await expect(row).toContainText('payments-api');
   await expect(row.locator('.chip')).toHaveText('working');
+  // The dot beside the name is the scannable version of that chip. A session that is
+  // working must not carry the green one, or the whole point of the dot is inverted.
+  await expect(row.locator('.live-dot')).toHaveClass(/working/);
+  await expect(row.locator('.live-dot')).not.toHaveClass(/done/);
+});
+
+test('a finished session gets the green dot, a working one does not', async () => {
+  /**
+   * The dot's entire job: with several terminals open, answer "which of these can I
+   * go back to" without reading anything. So the two states are asserted together, in
+   * one table — checking green-when-idle alone would still pass if every dot were
+   * green, which is the failure that would actually mislead.
+   */
+  const sandbox = fx.makeSandbox('dots');
+  fx.writeSession(sandbox, { pid: process.pid, status: 'idle', cwd: 'C:/work/finished', name: 'done-one' });
+  // A second pid that is certainly alive, so both rows pass the liveness probe and
+  // the difference between them is only the reported status.
+  fx.writeSession(sandbox, { pid: process.ppid, status: 'busy', cwd: 'C:/work/running', name: 'busy-one' });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="sessions"]');
+  const rows = page.locator('#sessionBody tr');
+  await expect(rows).toHaveCount(2);
+
+  const dotFor = (name) => rows.filter({ hasText: name }).locator('.live-dot');
+  await expect(dotFor('done-one')).toHaveClass(/done/);
+  await expect(dotFor('busy-one')).toHaveClass(/working/);
+
+  // Colour is the only difference a glance registers, so it must not be the only
+  // difference that exists: the dot is unlabelled, and green-vs-purple is exactly the
+  // pair red-green colour blindness collapses. The pulse and the title carry it too.
+  await expect(dotFor('done-one')).toHaveAttribute('aria-label', 'idle');
+  await expect(dotFor('busy-one')).toHaveAttribute('aria-label', 'working');
+  await expect(dotFor('done-one')).toHaveAttribute('title', /waiting for you/i);
+
+  const animated = await dotFor('busy-one').evaluate((n) => getComputedStyle(n).animationName);
+  expect(animated).not.toBe('none');
+  const still = await dotFor('done-one').evaluate((n) => getComputedStyle(n).animationName);
+  expect(still).toBe('none');
+});
+
+test('the dot agrees with the state column rather than contradicting it', async () => {
+  /**
+   * Two renderings of one fact is how a row ends up showing a green dot next to a
+   * "stalled" chip — which is worse than showing no dot, because the dot is the one
+   * that gets believed. Both come from sessionState for that reason; this asserts the
+   * agreement holds for the states that are easy to get wrong.
+   */
+  const sandbox = fx.makeSandbox('dot-agrees');
+  fx.writeSession(sandbox, {
+    pid: process.pid,
+    status: 'busy',
+    cwd: 'C:/work/quiet',
+    name: 'gone-quiet',
+    updatedAt: Date.now() - 3_600_000,
+  });
+  fx.writeSession(sandbox, { pid: 4_190_000_001, status: 'busy', cwd: 'C:/work/crashed', name: 'crashed-one' });
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.click('.nav-item[data-tab="sessions"]');
+  const rows = page.locator('#sessionBody tr');
+
+  const stalled = rows.filter({ hasText: 'gone-quiet' });
+  await expect(stalled.locator('.chip')).toHaveText('stalled');
+  await expect(stalled.locator('.live-dot')).toHaveClass(/stalled/);
+
+  const dead = rows.filter({ hasText: 'crashed-one' });
+  await expect(dead.locator('.chip')).toHaveText('died while working');
+  await expect(dead.locator('.live-dot')).toHaveClass(/dead/);
+
+  // Neither is finished, so neither may look finished.
+  await expect(page.locator('#sessionBody .live-dot.done')).toHaveCount(0);
 });
 
 test('a session that claims to be busy but has gone quiet reads as stalled', async () => {

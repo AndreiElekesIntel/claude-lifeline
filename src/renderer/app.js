@@ -517,6 +517,59 @@ $('#btnCoverageRecommended').addEventListener('click', async () => {
 
 /* =============================== sessions ============================= */
 
+/**
+ * What a session is doing, as one phrase and the tones that render it.
+ *
+ * Derived in one place because two things now show it — the dot beside the name and
+ * the chip in the State column. A green dot next to a "stalled" chip on the same row
+ * would be worse than showing no dot at all, so neither caller decides for itself.
+ *
+ * Liveness is merged with the reported status deliberately: "busy" on a dead process
+ * is the dead-session case, and showing it as working would be a lie.
+ *
+ * `dot` is separate from `chip` rather than reused because the two answer different
+ * questions. The chip names the state, so idle is neutral blue. The dot answers "can
+ * I go back to this one yet", and for that the useful colour is green — which in the
+ * chip vocabulary would read as success rather than as readiness.
+ */
+function sessionState(s, stalledAfterMs) {
+  if (!s.alive) {
+    const text = s.status === 'busy' ? 'died while working' : 'exited';
+    return { text, chip: 'danger', dot: 'dead', hint: text };
+  }
+  if (s.status === 'busy' && s.idleMs > stalledAfterMs) {
+    return { text: 'stalled', chip: 'warn', dot: 'stalled', hint: 'Claims to be working, but has gone quiet' };
+  }
+  if (s.status === 'busy') {
+    return { text: 'working', chip: 'accent', dot: 'working', hint: 'Still working' };
+  }
+  if (s.status === 'idle') {
+    return { text: 'idle', chip: 'info', dot: 'done', hint: 'Done — waiting for you' };
+  }
+  // A status Claude Code invented after this was written: named, but not colour-coded
+  // as either finished or working, because guessing which would be the actual bug.
+  return { text: s.status || 'unknown', chip: 'info', dot: 'unknown', hint: 'Reported as ' + (s.status || 'unknown') };
+}
+
+/**
+ * The dot beside the session name.
+ *
+ * The State column already says this in words, so the dot exists purely to be
+ * scannable: with five terminals open the only question is which ones are done, and
+ * that should be answerable without reading a single row.
+ *
+ * Colour is not the only channel: working pulses and done does not, so the two stay
+ * distinguishable without colour vision. The aria-label carries the word, since a
+ * screen reader would otherwise reach an empty span.
+ */
+function sessionDot(st) {
+  const dot = el('span', `live-dot ${st.dot}`);
+  dot.setAttribute('role', 'img');
+  dot.setAttribute('aria-label', st.text);
+  dot.title = st.hint;
+  return dot;
+}
+
 function renderSessions() {
   const body = $('#sessionBody');
   const list = state.sessions || [];
@@ -532,8 +585,17 @@ function renderSessions() {
   for (const s of list) {
     const tr = el('tr');
 
+    const st = sessionState(s, stalledAfter);
+
+    // The dot goes on the name's own line, immediately after it — not at the cell's
+    // right edge. Aligning the dots into a column reads better in the abstract, but
+    // the Session column is wide enough that a right-aligned dot ends up nearer the
+    // project path than the name, and looks like it belongs to that instead.
     const nameCell = el('td');
-    nameCell.appendChild(el('div', 'cell-main', s.name || s.kind || 'Claude Code'));
+    const nameLine = el('div', 'name-line');
+    nameLine.appendChild(el('span', 'cell-main', s.name || s.kind || 'Claude Code'));
+    nameLine.appendChild(sessionDot(st));
+    nameCell.appendChild(nameLine);
     nameCell.appendChild(el('div', 'cell-sub', String(s.sessionId || '').slice(0, 8)));
     tr.appendChild(nameCell);
 
@@ -542,25 +604,8 @@ function renderSessions() {
     projCell.appendChild(el('div', 'cell-sub', s.cwd || ''));
     tr.appendChild(projCell);
 
-    // State merges liveness with reported status: "busy" on a dead process is
-    // the dead-session case, and showing it as busy would be a lie.
-    let tone = '';
-    let text = s.status || 'unknown';
-    if (!s.alive) {
-      tone = 'danger';
-      text = s.status === 'busy' ? 'died while working' : 'exited';
-    } else if (s.status === 'busy' && s.idleMs > stalledAfter) {
-      tone = 'warn';
-      text = 'stalled';
-    } else if (s.status === 'busy') {
-      tone = 'accent';
-      text = 'working';
-    } else {
-      tone = 'info';
-      text = 'idle';
-    }
     const stateCell = el('td');
-    const chip = el('span', `chip ${tone}`, text);
+    const chip = el('span', `chip ${st.chip}`, st.text);
     // `idleMs` is time since the transcript was last written, so it is the evidence
     // for the word in the chip rather than extra detail — worth saying, because
     // this column used to claim "stalled" for sessions that were plainly working.
