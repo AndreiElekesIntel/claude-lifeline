@@ -364,6 +364,83 @@ function clipSpans(intervals, from, to) {
   return out;
 }
 
+/**
+ * A session's work split across the local days it actually spans.
+ *
+ * Returns `[{key, at, ms, share, spans}]`, one entry per day touched, where
+ * `share` is that day's fraction of the session's measured time and sums to 1
+ * across the result.
+ *
+ * ## Why this exists
+ *
+ * Time was already clipped per day, but cost was not: it was added whole to a
+ * single day. Which day depended on who was asking — `dailySeries` used the day
+ * work *started*, `history.groupByDay` used the day it was *last touched* — so the
+ * same session's spend appeared on two different dates in two different views of
+ * the same data. Measured on this machine's own history, 2026-07-24 read $492.83
+ * in History against $68.39 in Analytics, and 2026-07-30 read $33.28 against
+ * $0.00. Both were wrong: an overnight run does not spend all its money at
+ * whichever end of the night you happen to key on.
+ *
+ * Time is the only proxy available for *when* the money went. Claude Code records
+ * per-session token totals, not per-message ones, so there is no way to know which
+ * hour a token was spent in — apportioning by measured active time is the closest
+ * honest answer, and it has the property that matters: the days sum back to the
+ * session total exactly, so no money is invented or lost.
+ *
+ * A session with no usable intervals returns a single entry for `fallbackAt`,
+ * because the alternative — dropping it — would make the day totals stop adding up
+ * to the grand total.
+ */
+function splitByDay(session, { fallbackAt = null } = {}) {
+  const spansByDay = new Map();
+
+  for (const [spanStart, spanEnd] of session.intervals || []) {
+    if (!(spanEnd > spanStart)) continue;
+    // Walk only the days this span touches. Starting at local midnight of the
+    // span's first day keeps the arithmetic in local time, which is where the day
+    // boundaries the user cares about are.
+    const cursor = new Date(spanStart);
+    cursor.setHours(0, 0, 0, 0);
+    for (let at = cursor.getTime(); at < spanEnd; at += DAY_MS) {
+      const a = Math.max(spanStart, at);
+      const z = Math.min(spanEnd, at + DAY_MS);
+      if (!(z > a)) continue;
+      const key = dayKey(a);
+      if (!spansByDay.has(key)) spansByDay.set(key, { key, at: startOfDay(a), spans: [] });
+      spansByDay.get(key).spans.push([a, z]);
+    }
+  }
+
+  const days = Array.from(spansByDay.values()).map((d) => ({
+    ...d,
+    // Unioned within the day: a session's own spans should not overlap, but a
+    // union costs nothing and makes a malformed transcript harmless.
+    ms: unionMs(d.spans),
+  }));
+
+  const totalMs = days.reduce((n, d) => n + d.ms, 0);
+
+  if (!days.length || totalMs <= 0) {
+    const at = fallbackAt || session.lastAt || session.firstAt;
+    if (!at) return [];
+    // No measurable time: the whole session lands on one day. `share: 1` keeps the
+    // caller's arithmetic uniform — every path apportions by share.
+    return [{ key: dayKey(at), at: startOfDay(at), ms: 0, share: 1, spans: [], estimated: true }];
+  }
+
+  for (const d of days) d.share = d.ms / totalMs;
+  days.sort((a, b) => a.at - b.at);
+  return days;
+}
+
+/** Local midnight of the day containing `ts`. */
+function startOfDay(ts) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 /** Local-time day key, so "today" means the user's today, not UTC's. */
 function dayKey(ts) {
   const d = new Date(ts);
@@ -406,6 +483,15 @@ function addToBucket(bucket, s, spans) {
 /** Resolve collected spans into a single honest duration and drop the scratch. */
 function sealBucket(bucket) {
   bucket.activeMs = unionMs(bucket._spans);
+  /**
+   * Tokens are a count, so the apportioned fractions are rounded away here.
+   *
+   * Cost is deliberately *not* rounded: it is a derived decimal that gets summed
+   * and formatted downstream, and rounding each bucket would make the buckets stop
+   * adding up to the total. A token, though, is a discrete thing, and
+   * "3,037,072,263.997 tokens" is a display bug.
+   */
+  bucket.tokens = Math.round(bucket.tokens);
   delete bucket._spans;
   return bucket;
 }
@@ -426,31 +512,38 @@ function dailySeries(sessions, days, now = Date.now()) {
     buckets.set(key, emptyBucket(key, at));
   }
 
-  // Session counts are attributed to the day work started — that is how someone
-  // thinks about their own week. Time, though, is clipped to each day it actually
-  // spans, so an overnight session shows hours on both sides of midnight rather
-  // than dumping them all on the start day.
+  /**
+   * Counts land on the day work started; usage is apportioned across the days it
+   * spanned.
+   *
+   * The split is intentional. A *session* is one thing that began on one day, and
+   * "I started four sessions on Tuesday" is how people describe their own week —
+   * so the count, and the message counts that describe the same event, go to the
+   * start day whole. Time and money are quantities that accumulate while the
+   * session runs, so they are divided by measured time per day: an overnight run
+   * shows hours *and* spend on both sides of midnight.
+   *
+   * Cost previously went to the start day whole, which put an overnight session's
+   * entire spend before midnight and disagreed with the History tab — which keyed
+   * the same session on its *last* day. See splitByDay().
+   */
   for (const s of sessions) {
     if (!s.firstAt) continue;
     const startBucket = buckets.get(dayKey(s.firstAt));
     if (startBucket) {
       startBucket.sessions += 1;
-      startBucket.costUsd += s.costUsd;
-      startBucket.tokens += s.tokens.input + s.tokens.output + s.tokens.cacheWrite + s.tokens.cacheRead;
       startBucket.userMessages += s.userMessages;
       startBucket.assistantMessages += s.assistantMessages;
     }
-    // Walk only the days each span touches rather than every bucket per session.
-    for (const [spanStart, spanEnd] of s.intervals || []) {
-      let cursor = new Date(spanStart);
-      cursor.setHours(0, 0, 0, 0);
-      for (let at = cursor.getTime(); at < spanEnd; at += DAY_MS) {
-        const b = buckets.get(dayKey(at));
-        if (!b) continue;
-        const a = Math.max(spanStart, b.at);
-        const z = Math.min(spanEnd, b.at + DAY_MS);
-        if (z > a) b._spans.push([a, z]);
-      }
+
+    const tokens = s.tokens.input + s.tokens.output + s.tokens.cacheWrite + s.tokens.cacheRead;
+    for (const part of splitByDay(s, { fallbackAt: s.firstAt })) {
+      const b = buckets.get(part.key);
+      // Outside the window being charted — the session ran, but not in view.
+      if (!b) continue;
+      b.costUsd += s.costUsd * part.share;
+      b.tokens += tokens * part.share;
+      for (const span of part.spans) b._spans.push(span);
     }
   }
   return Array.from(buckets.values()).map(sealBucket);
@@ -483,19 +576,43 @@ function monthlySeries(sessions, months, now = Date.now()) {
     bounds.push([key, start, end]);
   }
 
+  // Same rule as dailySeries: the session count belongs to the month it started
+  // in, while time and money are apportioned by measured time per month. A session
+  // running across the 1st is rare, but "rare" is not a reason for the two charts
+  // to attribute it differently.
   for (const s of sessions) {
     if (!s.firstAt) continue;
     const startBucket = buckets.get(monthKey(s.firstAt));
     if (startBucket) {
       startBucket.sessions += 1;
-      startBucket.costUsd += s.costUsd;
-      startBucket.tokens += s.tokens.input + s.tokens.output + s.tokens.cacheWrite + s.tokens.cacheRead;
       startBucket.userMessages += s.userMessages;
       startBucket.assistantMessages += s.assistantMessages;
     }
+
+    const tokens = s.tokens.input + s.tokens.output + s.tokens.cacheWrite + s.tokens.cacheRead;
+    /** Per-month measured time, used as the apportioning weight. */
+    const perMonth = [];
+    let measured = 0;
     for (const [key, from, to] of bounds) {
       const clipped = clipSpans(s.intervals, from, to);
-      if (clipped.length) buckets.get(key)._spans.push(...clipped);
+      if (!clipped.length) continue;
+      const ms = unionMs(clipped);
+      perMonth.push([key, clipped, ms]);
+      measured += ms;
+    }
+
+    if (measured > 0) {
+      for (const [key, clipped, ms] of perMonth) {
+        const b = buckets.get(key);
+        b._spans.push(...clipped);
+        b.costUsd += s.costUsd * (ms / measured);
+        b.tokens += tokens * (ms / measured);
+      }
+    } else if (startBucket) {
+      // No measurable time inside the window: keep the totals whole on the start
+      // month rather than losing them.
+      startBucket.costUsd += s.costUsd;
+      startBucket.tokens += tokens;
     }
   }
   return Array.from(buckets.values()).map(sealBucket);
@@ -622,6 +739,8 @@ module.exports = {
   mergeSubagents,
   unionMs,
   clipSpans,
+  splitByDay,
+  startOfDay,
   dailySeries,
   monthlySeries,
   windowTotals,

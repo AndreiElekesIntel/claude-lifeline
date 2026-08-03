@@ -81,14 +81,61 @@ test('sessions group by the day they were last worked in, newest day first', () 
   assert.deepEqual(groups[0].sessions.map((s) => s.sessionId), ['today-1', 'today-2']);
 });
 
-test('an overnight session files under the day it finished, not the day it began', () => {
-  // Started 23:00 yesterday, last touched 02:00 today. You look for it under
+test('an overnight session is listed under the day it finished, not the day it began', () => {
+  // Started 23:00 yesterday, last touched 02:00 today. You look for the *row* under
   // today, because today is when you found it done.
   const start = new Date(2026, 6, 29, 23, 0, 0).getTime();
   const end = new Date(2026, 6, 30, 2, 0, 0).getTime();
   const groups = history.groupByDay([session({ firstAt: start, lastAt: end, intervals: [[start, end]] })], { now: NOW });
+
+  const today = groups.find((g) => g.label === 'Today');
+  assert.equal(today.count, 1, 'the session is listed once, under the day it finished');
+  assert.equal(
+    groups.find((g) => g.label === 'Yesterday').count,
+    0,
+    'and is not listed a second time under the day it started'
+  );
+});
+
+test('an overnight session spends its money on both sides of midnight', () => {
+  // 23:00–02:00 is one hour before midnight and two after, so the spend divides
+  // 1:2. Filing it all on either day would be a claim about when the money went
+  // that the timestamps contradict — and it is what made History and Analytics
+  // disagree about the same session.
+  const start = new Date(2026, 6, 29, 23, 0, 0).getTime();
+  const end = new Date(2026, 6, 30, 2, 0, 0).getTime();
+  const groups = history.groupByDay([session({ firstAt: start, lastAt: end, intervals: [[start, end]], costUsd: 3 })], { now: NOW });
+
+  const yesterday = groups.find((g) => g.label === 'Yesterday');
+  const today = groups.find((g) => g.label === 'Today');
+  assert.ok(Math.abs(yesterday.costUsd - 1) < 1e-9, 'one hour of three, before midnight');
+  assert.ok(Math.abs(today.costUsd - 2) < 1e-9, 'two hours of three, after');
+  assert.equal(yesterday.split, true, 'and the day says its total is shared');
+  assert.equal(today.split, true);
+});
+
+test('apportioning cost across days never invents or loses money', () => {
+  // The property that makes proration safe: whatever the split, the days must sum
+  // back to what the sessions actually cost.
+  const overnight = new Date(2026, 6, 29, 22, 30, 0).getTime();
+  const sessions = [
+    session({ sessionId: 'a', costUsd: 3, firstAt: overnight, lastAt: overnight + 4 * H, intervals: [[overnight, overnight + 4 * H]] }),
+    session({ sessionId: 'b', costUsd: 1.25 }),
+    // No intervals at all: must still contribute its full cost somewhere.
+    session({ sessionId: 'c', costUsd: 7.5, intervals: [], activeMs: 0 }),
+  ];
+  const groups = history.groupByDay(sessions, { now: NOW });
+  const total = groups.reduce((n, g) => n + g.costUsd, 0);
+  assert.ok(Math.abs(total - (3 + 1.25 + 7.5)) < 1e-9, `days summed to ${total}`);
+  assert.equal(history.summarise(groups).sessions, 3, 'and each session is counted once');
+});
+
+test("a session with no measurable time keeps its cost rather than dropping it", () => {
+  // A session Claude Code recorded a cost for but no usable intervals. Proration
+  // has nothing to weight by, so the whole amount lands on its one day.
+  const groups = history.groupByDay([session({ costUsd: 4, intervals: [], activeMs: 0 })], { now: NOW });
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].label, 'Today');
+  assert.equal(groups[0].costUsd, 4);
 });
 
 test('a day never reports more time than it contains, because overlap is unioned', () => {
