@@ -236,6 +236,22 @@ body, .panel, .stat-card, .titlebar, .sidebar { transition: background-color 0.2
 }
 .sidebar-foot { margin-top: auto; }
 
+/* A group is the gap above it plus a quiet heading — no box, no rule. The nav is
+   already a column of buttons on a panel; adding borders would make three
+   containers where the eye only needs three pauses. */
+.nav-group { display: flex; flex-direction: column; gap: 3px; margin-top: 14px; }
+.nav-group-label {
+  padding: 0 12px 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  /* Not selectable: it labels a region rather than being content, and a caret
+     dragged across the nav should not highlight it. */
+  user-select: none;
+}
+
 .nav-item {
   display: flex; align-items: center; gap: 11px;
   width: 100%;
@@ -523,11 +539,39 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .chip.accent { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-border); }
 
 /* ---------- Empty state ---------- */
-.empty { padding: 34px 20px; text-align: center; color: var(--text-dim); }
+/* Laid out as a column with a gap rather than with per-child margins, so an
+   empty state that ends in a button spaces the button from the sentence above
+   it instead of letting it sit flush against the text. */
+.empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 3px;
+  padding: 34px 20px;
+  text-align: center;
+  color: var(--text-dim);
+}
 .empty.hidden { display: none; }
-.empty-art { font-size: 30px; color: var(--text-faint); margin-bottom: 6px; }
+/* No line-height override: at 30px the glyph is taller than its own em box, and
+   pinning line-height to 1 clipped its descender by 5px. The margin does the
+   tightening instead. */
+.empty-art { margin-bottom: 3px; font-size: 30px; color: var(--text-faint); }
 .empty p { margin: 0; font-size: 13.5px; font-weight: 550; color: var(--text); }
-.empty span { display: block; margin-top: 3px; font-size: 12.5px; }
+/* Capped so the explanation wraps into a readable column instead of one long
+   line across a wide window. */
+.empty span { max-width: 48ch; font-size: 12.5px; line-height: 1.55; }
+/* The call to action is a different kind of thing from the prose above it, so
+   it gets more air than the gap between the two lines of text. */
+.empty .btn { margin-top: 15px; }
+
+/* Boxed variant, for pages where the empty state *is* the page rather than the
+   inside of a panel that already draws its own border. Dashed, because the box
+   marks a space waiting to be filled. */
+.empty.boxed {
+  margin-top: 2px;
+  padding: 46px 24px;
+  background: var(--bg-elev);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
 
 /* ---------- Coverage: dashboard widget (totals only) ---------- */
 .side-stack { display: flex; flex-direction: column; gap: 14px; }
@@ -821,6 +865,22 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .mono { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 
 /* ---------- Settings ---------- */
+
+/* A band heading over each cluster of groups. Not a card: it labels the cards
+   below it, so it has no background of its own and sits closer to what it
+   introduces than to what came before. */
+.settings-band { margin: 22px 0 10px; }
+/* The first band follows the jump list, which already provides the separation —
+   so it does not need a band's worth of air above it as well. Written as a
+   sibling rule rather than :first-of-type, which would match the page head. */
+.settings-nav + .settings-band { margin-top: 0; }
+.settings-band-title {
+  margin: 0;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.settings-band-hint { margin: 4px 0 0; font-size: 12.5px; color: var(--text-dim); max-width: 76ch; line-height: 1.5; }
+
 .settings-group {
   position: relative;
   padding: 18px;
@@ -891,7 +951,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
    it findable, so the groups get an index. */
 .settings-nav {
   position: sticky; top: -26px; z-index: 5;
-  display: flex; gap: 6px; flex-wrap: wrap;
+  display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: flex-start;
   padding: 10px 12px; margin-bottom: 14px;
   background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
   backdrop-filter: blur(8px);
@@ -899,6 +959,19 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
 }
+/* The jump list is banded to match the page. Nine chips in one row read as an
+   undifferentiated list; four labelled clusters say what kind of setting each
+   entry is before you click it. */
+.settings-nav-band { display: flex; flex-direction: column; gap: 4px; }
+.settings-nav-band-label {
+  padding-left: 4px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.settings-nav-row { display: flex; gap: 4px; flex-wrap: wrap; }
+/* A hairline between clusters, drawn on the band rather than as a separate
+   element so it cannot end up orphaned on a wrapped row. */
+.settings-nav-band + .settings-nav-band { padding-left: 18px; border-left: 1px solid var(--border); margin-left: -9px; }
 .settings-nav-item {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 11px;
@@ -1150,6 +1223,17 @@ button.path-row:hover .path-open, button.path-row:focus-visible .path-open { opa
 .built-title { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
 .built-desc { margin: 5px 0 0; font-size: 12.5px; line-height: 1.65; color: var(--text-dim); max-width: 78ch; }
 .built-desc strong { color: var(--text); font-weight: 600; }
+
+/* The running total. Separated by a rule rather than more whitespace, because it
+   is a figure rather than a continuation of the sentence above it. */
+.built-cost {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 11px;
+  border-top: 1px solid var(--accent-border);
+}
+.built-cost-num { font-size: 15px; font-weight: 660; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; color: var(--accent-text); }
+.built-cost-label { font-size: 12px; color: var(--text-dim); }
+.built-cost-note { font-size: 11.5px; color: var(--text-faint); }
 
 @media (max-width: 680px) {
   .repo-card { flex-direction: column; gap: 12px; }

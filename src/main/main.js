@@ -23,6 +23,7 @@ const { loadConfig, saveConfig, defaultConfig, deepMerge } = require('../shared/
 const { SCHEMA_VERSION } = require('../shared/migrate');
 const { ERROR_CLASSES, POLICIES, effectivePolicy } = require('../shared/policy');
 const { RATES } = require('../shared/pricing');
+const { BUILD_COST_USD } = require('../shared/build-cost');
 const installer = require('../shared/installer');
 const eventlog = require('../shared/eventlog');
 const ledger = require('../shared/ledger');
@@ -770,6 +771,14 @@ function serialisableState(state) {
       node: process.versions.node,
       schema: SCHEMA_VERSION,
     },
+    /**
+     * What it cost to build Lifeline, for the About page.
+     *
+     * Sent from the main process rather than written into the renderer, so the
+     * figure lives in exactly one file — see the note in build-cost.js for why
+     * it is maintained by hand rather than computed.
+     */
+    buildCostUsd: BUILD_COST_USD,
     /** Model ids with built-in rates, so the UI can offer them for overriding. */
     pricingModels: Object.keys(RATES),
     /**

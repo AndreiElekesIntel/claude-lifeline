@@ -50,48 +50,74 @@
     </header>
 
     <div class="shell">
+      <!--
+        Grouped by what you came to do, not by feature area.
+
+        Nine flat items gave no hint that Active sessions and History are two views
+        of the same thing while Coverage and Settings are configuration you set once.
+        The three groups are: what is happening now, what it added up to, and how it
+        behaves. Dashboard sits above them all because it is the summary of all three
+        and belongs to none.
+
+        The headings are `aria-hidden` and the groups are unlabelled `role="group"`
+        elements — a screen reader gets the button names, which already say
+        everything, and skips three decorative words.
+      -->
       <nav class="sidebar">
         <button class="nav-item active" data-tab="dashboard">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z" /></svg>
           <span>Dashboard</span>
         </button>
-        <button class="nav-item" data-tab="sessions">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
-          <span>Sessions</span>
-          <span class="nav-badge" id="badgeSessions"></span>
-        </button>
-        <button class="nav-item" data-tab="history">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
-          <span>History</span>
-        </button>
-        <button class="nav-item" data-tab="launchpad">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3c3 2.6 4.5 5.7 4.5 8.6 0 1.9-.7 3.6-1.9 4.9h-5.2A6.7 6.7 0 0 1 7.5 11.6C7.5 8.7 9 5.6 12 3z" />
-            <path d="M9.4 16.5 8 21l4-2 4 2-1.4-4.5M12 10h.01" />
-          </svg>
-          <span>Launchpad</span>
-        </button>
-        <button class="nav-item" data-tab="analytics">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
-          <span>Analytics</span>
-        </button>
-        <button class="nav-item" data-tab="coverage">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z" /><path d="M9 12l2 2 4-4" /></svg>
-          <span>Coverage</span>
-          <span class="nav-badge" id="badgeCoverage"></span>
-        </button>
-        <button class="nav-item" data-tab="activity">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4" /></svg>
-          <span>Activity</span>
-          <span class="nav-badge attention" id="badgeAttention"></span>
-        </button>
-        <button class="nav-item" data-tab="settings">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
-          </svg>
-          <span>Settings</span>
-        </button>
+
+        <div class="nav-group" role="group">
+          <div class="nav-group-label" aria-hidden="true">Now</div>
+          <button class="nav-item" data-tab="sessions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
+            <span>Active sessions</span>
+            <span class="nav-badge" id="badgeSessions"></span>
+          </button>
+          <button class="nav-item" data-tab="launchpad">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3c3 2.6 4.5 5.7 4.5 8.6 0 1.9-.7 3.6-1.9 4.9h-5.2A6.7 6.7 0 0 1 7.5 11.6C7.5 8.7 9 5.6 12 3z" />
+              <path d="M9.4 16.5 8 21l4-2 4 2-1.4-4.5M12 10h.01" />
+            </svg>
+            <span>Launchpad</span>
+          </button>
+        </div>
+
+        <div class="nav-group" role="group">
+          <div class="nav-group-label" aria-hidden="true">Looking back</div>
+          <button class="nav-item" data-tab="history">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
+            <span>History</span>
+          </button>
+          <button class="nav-item" data-tab="analytics">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
+            <span>Analytics</span>
+          </button>
+          <button class="nav-item" data-tab="activity">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4" /></svg>
+            <span>Activity</span>
+            <span class="nav-badge attention" id="badgeAttention"></span>
+          </button>
+        </div>
+
+        <div class="nav-group" role="group">
+          <div class="nav-group-label" aria-hidden="true">Set up</div>
+          <button class="nav-item" data-tab="coverage">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z" /><path d="M9 12l2 2 4-4" /></svg>
+            <span>Coverage</span>
+            <span class="nav-badge" id="badgeCoverage"></span>
+          </button>
+          <button class="nav-item" data-tab="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" />
+            </svg>
+            <span>Settings</span>
+          </button>
+        </div>
+
         <div class="sidebar-foot">
           <button class="nav-item" data-tab="about">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
@@ -210,8 +236,8 @@
         <section class="tab" data-tab="sessions">
           <div class="page-head">
             <div>
-              <h1>Sessions</h1>
-              <p class="subtitle">Read live from Claude Code's own session records — nothing is attached to or altered.</p>
+              <h1>Active sessions</h1>
+              <p class="subtitle">The sessions running right now, read live from Claude Code's own records — nothing is attached to or altered. Finished ones are in History.</p>
             </div>
           </div>
           <div class="table-wrap">
@@ -315,7 +341,7 @@
 
           <div class="preset-grid" id="presetGrid"></div>
 
-          <div class="empty hidden" id="presetEmpty">
+          <div class="empty boxed hidden" id="presetEmpty">
             <div class="empty-art">◌</div>
             <p>No shortcuts yet.</p>
             <span
@@ -724,8 +750,22 @@
 
           <!-- Section jump list. The page is long by nature — one screen per
                concern would hide the relationships between them — so the fix is
-               navigation, not fewer settings. -->
+               navigation, not fewer settings. Banded in app.js, to match the
+               bands below. -->
           <div class="settings-nav" id="settingsNav"></div>
+
+          <!-- Band headings. Nine groups in a flat column is a list rather than
+               an organisation: two of them are about how recovery behaves and two
+               about how this window looks, and nothing on the page said so. Each
+               band names the question its groups answer. They are h2s so the page
+               has a real outline; the group headings below them are h3-weight by
+               role but stay h2 in the markup, since every other tab styles
+               `.settings-group h2` and splitting that would be a bigger change
+               than this reorganisation earns. -->
+          <div class="settings-band">
+            <h2 class="settings-band-title">Recovery</h2>
+            <p class="settings-band-hint">Whether sessions are protected at all, and what happens when one fails.</p>
+          </div>
 
           <div class="settings-group" id="setInstall">
             <div class="group-head">
@@ -772,6 +812,11 @@
             <div class="policy-list" id="policyList"></div>
           </div>
 
+          <div class="settings-band">
+            <h2 class="settings-band-title">Reporting</h2>
+            <p class="settings-band-hint">What Lifeline works out from your sessions, and how it tells you about it.</p>
+          </div>
+
           <div class="settings-group" id="setAnalytics">
             <div class="group-head">
               <div>
@@ -812,6 +857,11 @@
               </div>
             </div>
             <div class="toggle-list" id="notifyToggles"></div>
+          </div>
+
+          <div class="settings-band">
+            <h2 class="settings-band-title">This window</h2>
+            <p class="settings-band-hint">How Lifeline looks and where it sits. Nothing here changes what it does.</p>
           </div>
 
           <div class="settings-group" id="setAppearance">
@@ -857,6 +907,11 @@
             <!-- Built in app.js: two identical blocks of controls, one per widget,
                  and a duplicated set of ids in the markup would be a bug. -->
             <div class="widget-settings" id="widgetSettings"></div>
+          </div>
+
+          <div class="settings-band">
+            <h2 class="settings-band-title">Machine</h2>
+            <p class="settings-band-hint">Where recovery applies, and the storage and diagnostics behind it.</p>
           </div>
 
           <div class="settings-group" id="setScope">
@@ -996,6 +1051,9 @@
                   written with <strong>Claude Opus 5</strong> inside <strong>Claude Code</strong>. Which makes it a tool
                   built in the thing it protects: the failures it recovers from are ones it hit while being written.
                 </p>
+                <!-- Filled by renderAbout(). An app whose subject is the cost of
+                     long Claude Code runs should say what its own run cost. -->
+                <div class="built-cost" id="builtCost"></div>
               </div>
             </div>
           </div>

@@ -685,8 +685,20 @@ test('navigation reaches every tab and the about tab lists real paths', async ()
   // Read off the sidebar rather than hard-coded, so adding a tab without wiring
   // its section — the exact bug History and Launchpad shipped with first — fails
   // here instead of being invisible until someone clicks it.
+  //
+  // Compared as a set, not a sequence: the sidebar is grouped now (Now / Looking
+  // back / Set up), and which band a tab sits in is a presentation choice that
+  // will change again. What must hold is that every tab is reachable and every one
+  // opens a section — asserting the order as well made regrouping the sidebar
+  // look like a broken navigation.
   const tabs = await page.locator('.nav-item').evaluateAll((els) => els.map((el) => el.dataset.tab));
-  expect(tabs).toEqual(['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about']);
+  expect([...tabs].sort()).toEqual(
+    ['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about'].sort()
+  );
+  // Dashboard leads and About is last, which are the two positions that are not
+  // arbitrary: one is the landing tab, the other the footer.
+  expect(tabs[0]).toBe('dashboard');
+  expect(tabs[tabs.length - 1]).toBe('about');
 
   for (const tab of tabs) {
     await page.click(`.nav-item[data-tab="${tab}"]`);
@@ -1300,7 +1312,7 @@ test('the about page reports live figures, not static copy', async () => {
   const { page } = ctx;
   await page.click('.nav-item[data-tab="about"]');
 
-  await expect(page.locator('#aboutMetrics .hero-metric')).toHaveCount(4);
+  await expect(page.locator('#aboutMetrics .hero-metric')).toHaveCount(5);
   await expect(page.locator('#aboutMetrics')).toContainText('checks enabled');
   await expect(page.locator('#aboutSteps .step')).toHaveCount(4);
   await expect(page.locator('#aboutRetryCards .split-card')).toHaveCount(2);
@@ -1315,6 +1327,13 @@ test('the about page reports live figures, not static copy', async () => {
   await expect(page.locator('.built-with')).toContainText('Claude Opus 5');
   await expect(page.locator('.built-with')).toContainText('Claude Code');
   await expect(page.locator('#aboutFoot')).toContainText('Not affiliated with Anthropic');
+
+  // What the app cost to write, stated to the precision the figure is kept at.
+  // Read from the shared module rather than written here, so bumping the total
+  // after a session is a one-line edit and not a two-file one.
+  const { BUILD_COST_USD } = require('../../src/shared/build-cost');
+  await expect(page.locator('#builtCost')).toContainText(`$${BUILD_COST_USD.toFixed(4)}`);
+  await expect(page.locator('#aboutMetrics')).toContainText('cost to build');
 });
 
 test('the about page names the version it is actually running', async () => {

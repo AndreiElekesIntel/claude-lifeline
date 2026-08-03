@@ -2029,18 +2029,42 @@ const ADVANCED_COPY = {
   debugLogging: ['Verbose hook logging', 'Write every hook decision to hook.log. Useful when diagnosing why a session was not resumed.'],
 };
 
-/** Settings sections, in page order, for the jump list. */
-const SETTINGS_SECTIONS = [
-  ['setInstall', 'Installation'],
-  ['setSafety', 'Safety limits'],
-  ['setPolicy', 'Per-failure tuning'],
-  ['setAnalytics', 'Analytics & cost'],
-  ['setNotify', 'Notifications'],
-  ['setAppearance', 'Appearance'],
-  ['setWidgets', 'Desktop widgets'],
-  ['setScope', 'Project scope'],
-  ['setAdvanced', 'Advanced'],
+/**
+ * Settings sections, in page order, grouped for the jump list.
+ *
+ * Nine groups in one flat column was a list, not an organisation: "Safety limits"
+ * and "Per-failure tuning" both answer *how recovery behaves*, while "Appearance"
+ * and "Desktop widgets" have nothing to do with either, and the jump list gave no
+ * hint which was which. The bands below name the question each cluster answers, in
+ * the order someone actually meets them — get it working, tune what it does, then
+ * how it tells you, then how it looks, then the parts to leave alone.
+ *
+ * The order here is the page order, and `renderSettingsNav()` asserts nothing
+ * about it: the page markup carries matching band headings, so if the two drift
+ * the jump list is still correct, just grouped oddly.
+ */
+const SETTINGS_BANDS = [
+  ['Recovery', [
+    ['setInstall', 'Installation'],
+    ['setSafety', 'Safety limits'],
+    ['setPolicy', 'Per-failure tuning'],
+  ]],
+  ['Reporting', [
+    ['setAnalytics', 'Analytics & cost'],
+    ['setNotify', 'Notifications'],
+  ]],
+  ['This window', [
+    ['setAppearance', 'Appearance'],
+    ['setWidgets', 'Desktop widgets'],
+  ]],
+  ['Machine', [
+    ['setScope', 'Project scope'],
+    ['setAdvanced', 'Advanced'],
+  ]],
 ];
+
+/** The same sections, flat, for anything that just wants page order. */
+const SETTINGS_SECTIONS = SETTINGS_BANDS.flatMap(([, sections]) => sections);
 
 /** Read a nested path like 'limits.cooldownMs'. */
 function patchFor(path, value) {
@@ -2186,26 +2210,35 @@ function renderSettings() {
 function renderSettingsNav() {
   const host = $('#settingsNav');
   host.replaceChildren();
-  for (const [id, label] of SETTINGS_SECTIONS) {
-    const btn = el('button', 'settings-nav-item', label);
-    // Copy the group's rail colour onto its jump-list entry, so the two are
-    // visibly paired. Read from the group rather than duplicated here — the
-    // colours are defined once, in the stylesheet, keyed by the same id.
-    const group = document.getElementById(id);
-    if (group) {
-      const rail = getComputedStyle(group).getPropertyValue('--rail').trim();
-      if (rail) btn.style.setProperty('--rail', rail);
-    }
-    btn.addEventListener('click', () => {
-      const target = document.getElementById(id);
-      if (!target) return;
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      // Brief highlight: after a scroll the eye needs telling where it landed.
-      target.classList.add('flash');
-      setTimeout(() => target.classList.remove('flash'), 1200);
-    });
-    host.appendChild(btn);
+  for (const [band, sections] of SETTINGS_BANDS) {
+    const group = el('div', 'settings-nav-band');
+    group.appendChild(el('span', 'settings-nav-band-label', band));
+    const row = el('div', 'settings-nav-row');
+    for (const [id, label] of sections) row.appendChild(settingsNavItem(id, label));
+    group.appendChild(row);
+    host.appendChild(group);
   }
+}
+
+function settingsNavItem(id, label) {
+  const btn = el('button', 'settings-nav-item', label);
+  // Copy the group's rail colour onto its jump-list entry, so the two are
+  // visibly paired. Read from the group rather than duplicated here — the
+  // colours are defined once, in the stylesheet, keyed by the same id.
+  const group = document.getElementById(id);
+  if (group) {
+    const rail = getComputedStyle(group).getPropertyValue('--rail').trim();
+    if (rail) btn.style.setProperty('--rail', rail);
+  }
+  btn.addEventListener('click', () => {
+    const target = document.getElementById(id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Brief highlight: after a scroll the eye needs telling where it landed.
+    target.classList.add('flash');
+    setTimeout(() => target.classList.remove('flash'), 1200);
+  });
+  return btn;
 }
 
 /* ========================== desktop widgets ============================= */
@@ -2806,17 +2839,26 @@ function renderAbout() {
   const hooks = state.hooks || { events: [], expected: [] };
   const { enabled, total } = coverageCounts();
   const rows = [
-    [`${(hooks.events || []).length}/${(hooks.expected || []).length}`, 'hooks registered'],
-    [`${enabled}/${total}`, 'checks enabled'],
+    [`${(hooks.events || []).length}/${(hooks.expected || []).length}`, 'hooks registered', null],
+    [`${enabled}/${total}`, 'checks enabled', null],
     // From the event log, like the dashboard's count — not from the ledger, which
     // is pruned to 48 hours and so read as zero next to a visible timeline.
-    [String(state.stats.recoveredLogged ?? state.stats.recoveredToday ?? 0), 'recoveries logged'],
-    [state.config.enabled ? 'Active' : 'Paused', 'protection'],
+    [String(state.stats.recoveredLogged ?? state.stats.recoveredToday ?? 0), 'recoveries logged', null],
+    [state.config.enabled ? 'Active' : 'Paused', 'protection', null],
+    // What Lifeline cost to write, in the same units the Analytics tab reports
+    // everyone else's work in. `money()` shortens it for display; the exact
+    // figure goes in the sub-line, because four decimal places is the honest
+    // precision of a per-million-token rate and rounding it hides the fact that
+    // this number is bumped session by session.
+    ...(typeof state.buildCostUsd === 'number'
+      ? [[money(state.buildCostUsd), 'cost to build', `${currencySymbol()}${state.buildCostUsd.toFixed(4)} of Claude Opus 5`]]
+      : []),
   ];
-  for (const [value, label] of rows) {
+  for (const [value, label, sub] of rows) {
     const box = el('div', 'hero-metric');
     box.appendChild(el('span', 'hero-metric-num', value));
     box.appendChild(el('span', 'hero-metric-label', label));
+    if (sub) box.appendChild(el('span', 'hero-metric-sub', sub));
     metrics.appendChild(box);
   }
 
@@ -2869,6 +2911,20 @@ function renderAbout() {
       row.addEventListener('click', () => api.openPath(target));
     }
     host.appendChild(row);
+  }
+
+  // The exact figure, in the credit that explains what it bought. The hero
+  // metric above rounds for scanning; this is the one to quote.
+  const builtCost = $('#builtCost');
+  builtCost.replaceChildren();
+  const hasCost = typeof state.buildCostUsd === 'number';
+  // Toggled rather than only ever hidden: an empty flex row with a top border
+  // would still draw a rule under the paragraph with nothing beneath it.
+  builtCost.classList.toggle('hidden', !hasCost);
+  if (hasCost) {
+    builtCost.appendChild(el('span', 'built-cost-num', `${currencySymbol()}${state.buildCostUsd.toFixed(4)}`));
+    builtCost.appendChild(el('span', 'built-cost-label', 'of API spend across every session that wrote it'));
+    builtCost.appendChild(el('span', 'built-cost-note', 'kept up to date by hand, session by session'));
   }
 
   const foot = $('#aboutFoot');
