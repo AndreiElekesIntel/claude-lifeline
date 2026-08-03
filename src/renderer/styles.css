@@ -744,6 +744,52 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .data-table.compact th, .data-table.compact td { padding: 7px 10px; }
 .cell-main { font-weight: 550; }
 .cell-sub { font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); overflow-wrap: anywhere; }
+
+/* The session name with its live dot directly after it. Inline-flex rather than flex
+   so the row is only as wide as the name — a full-width flex row would let the dot
+   drift away from the text it belongs to on a wide column. */
+.name-line { display: inline-flex; align-items: center; gap: 7px; }
+
+/* Is this session still working, or can I go back to it?
+   Sized a little larger than .status-dot: that one sits inside a labelled pill, this
+   one carries the meaning alone. The ring is what keeps it visible against both the
+   row and its hover background without needing a different colour per theme. */
+.live-dot {
+  flex: none;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 2px var(--bg-elev);
+}
+.data-table tbody tr:hover .live-dot { box-shadow: 0 0 0 2px var(--bg-elev-2); }
+/* Green means done: nothing is running, so it is yours to pick up. */
+.live-dot.done { background: var(--ok); }
+/* Working pulses. The animation is the second channel — colour alone would leave
+   "working" and "done" indistinguishable for red-green colour blindness, and this
+   dot has no text of its own to fall back on. */
+.live-dot.working {
+  background: var(--accent);
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+.live-dot.stalled { background: var(--warn); }
+.live-dot.dead { background: var(--danger); }
+/* An unreported status gets a dot that claims neither. */
+.live-dot.unknown { background: var(--text-faint); }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+/* Without the pulse, "working" and "done" would differ by hue alone — which is the
+   one distinction red-green colour blindness cannot make, on a mark with no text.
+   So the shape carries it instead: working becomes a ring, done stays solid. */
+@media (prefers-reduced-motion: reduce) {
+  .live-dot.working {
+    animation: none;
+    box-sizing: border-box;
+    background: transparent;
+    border: 2.5px solid var(--accent);
+  }
+}
 .mono { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 
 /* ---------- Settings ---------- */

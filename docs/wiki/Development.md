@@ -2,7 +2,7 @@
 
 ```bash
 npm test             # 304 unit tests
-npm run test:e2e     # 112 Playwright tests against the real Electron app
+npm run test:e2e     # 114 Playwright tests against the real Electron app
 npm run lint         # project-specific invariant checks
 npm run screenshots  # regenerate docs/screenshots/
 npm run wiki         # mirror docs/wiki/ to the GitHub wiki
