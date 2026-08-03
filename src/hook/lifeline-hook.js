@@ -185,6 +185,15 @@ async function main() {
       detail: policy.blockedBy
         ? `${policy.reason} Recovery for this class is enabled but held back by "Never retry hopeless failures" in Coverage.`
         : policy.reason,
+      /**
+       * What to actually do about it, carried separately from the diagnosis.
+       *
+       * The reason explains why Lifeline stopped; this says how to get moving
+       * again, and for `access_denied` it exists specifically to contradict the
+       * CLI's own "Please run /login" — a permission denial is not a login
+       * problem, and following that advice wastes the user's time.
+       */
+      fix: policy.fix || null,
       needsAttention: true,
       rawError,
       lastAssistantMessage,

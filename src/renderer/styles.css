@@ -486,6 +486,26 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .tl-body { flex: 1; min-width: 0; }
 .tl-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 550; }
 .tl-detail { margin-top: 2px; font-size: 12.5px; color: var(--text-dim); overflow-wrap: anywhere; }
+/* The fix, set apart from the diagnosis by a rule rather than a colour, so it
+   reads as the next step and not as more description. */
+.tl-fix {
+  margin-top: 5px;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  font-size: 12.5px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+/* The provider's raw text: monospace and dimmed, because it is evidence to copy
+   rather than prose to read. */
+.tl-raw {
+  margin-top: 5px;
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
 .tl-meta { margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-faint); }
 .tl-time { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
@@ -544,6 +564,14 @@ h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .cov-card-name { font-size: 13.5px; font-weight: 600; }
 .cov-card-key { display: block; margin-top: 2px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 .cov-card-why { font-size: 12.5px; color: var(--text-dim); }
+/* What to do when Lifeline deliberately will not act. Same treatment as the
+   timeline's fix line, so the two read as the same kind of instruction. */
+.cov-card-fix {
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  font-size: 12px;
+  color: var(--text);
+}
 .cov-card-foot { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .cov-card-num { font-size: 11.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .cov-card-blocked {

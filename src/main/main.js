@@ -420,12 +420,32 @@ function notifyRecovery(state) {
     notified: 'Action needed',
     blocked: 'Recovery stopped',
   };
-  new Notification({
-    title: `Claude Lifeline — ${titles[newest.kind] || 'Update'}`,
-    body: newest.detail || newest.label || newest.errorClass || '',
+  /**
+   * Name the failure in the title, not just "Action needed".
+   *
+   * "Action needed — Usage limit reached" and "Action needed — Access denied" are
+   * different problems with different fixes, and the title is the part that gets
+   * read. The old title said neither, which is how a spent quota came across as a
+   * credentials problem.
+   */
+  const heading = titles[newest.kind] || 'Update';
+  const title = newest.label && newest.kind !== 'recovered'
+    ? `Claude Lifeline — ${heading}: ${newest.label}`
+    : `Claude Lifeline — ${heading}`;
+  // The fix goes in the body after the diagnosis: a toast is read once, and
+  // "what do I do" is the useful half.
+  const body = [newest.detail || newest.label || newest.errorClass || '', newest.fix]
+    .filter(Boolean)
+    .join('\n');
+  const toast = new Notification({
+    title,
+    body,
     silent: !cfg.features.soundAlerts,
     icon: nativeImage.createFromBuffer(drawIcon(64, newest.kind === 'recovered' ? 'running' : 'attention')),
-  }).show();
+  });
+  // Clicking an alert goes to the log that explains it.
+  toast.on('click', () => showWindow(newest.needsAttention ? 'activity' : 'dashboard'));
+  toast.show();
 }
 
 /**
@@ -721,6 +741,8 @@ function serialisableState(state) {
         key: cls,
         label: POLICIES[cls].label,
         reason: POLICIES[cls].reason,
+        /** Non-null only for notify classes, where there is something to do. */
+        fix: POLICIES[cls].fix || null,
         strategy: POLICIES[cls].strategy,
         defaultResume: POLICIES[cls].resume,
         effective: {

@@ -345,6 +345,22 @@ function renderTimeline(host, events, empty) {
     body.appendChild(title);
 
     if (e.detail) body.appendChild(el('div', 'tl-detail', e.detail));
+    /**
+     * What to do about it, styled apart from the diagnosis above.
+     *
+     * Only notify-class events carry one. It matters most for `access_denied`,
+     * where Claude Code's own message says "Please run /login" and that is the
+     * wrong advice — the sign-in worked, the call was refused.
+     */
+    if (e.fix) body.appendChild(el('div', 'tl-fix', e.fix));
+    /**
+     * The provider's own words, kept verbatim and last.
+     *
+     * Lifeline's classification is a summary, and a summary can be wrong. The
+     * original text is what someone pastes into a support ticket or searches for,
+     * so it stays available rather than being replaced by the interpretation.
+     */
+    if (e.rawError) body.appendChild(el('div', 'tl-raw', e.rawError));
 
     const meta = el('div', 'tl-meta');
     if (e.cwd) meta.appendChild(el('span', null, projectName(e.cwd)));
@@ -463,6 +479,9 @@ function renderCoverageClasses() {
     card.appendChild(head);
 
     card.appendChild(el('div', 'cov-card-why', meta.reason));
+    // Notify classes only: when Lifeline will not act, the card should say what
+    // the user has to do instead.
+    if (meta.fix) card.appendChild(el('div', 'cov-card-fix', meta.fix));
 
     const foot = el('div', 'cov-card-foot');
     foot.appendChild(el('span', `chip ${STRATEGY_TONE[resolved.strategy] || ''}`, STRATEGY_TEXT[resolved.strategy] || resolved.strategy));

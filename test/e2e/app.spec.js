@@ -514,8 +514,12 @@ test('per-failure tuning is disabled for classes that never retry', async () => 
   const { page } = ctx;
   await page.click('.nav-item[data-tab="settings"]');
 
-  // All ten real error classes must be tunable.
-  await expect(page.locator('#policyList .policy-row')).toHaveCount(10);
+  // Every real error class must be tunable. Counted from the shared list rather
+  // than written as a literal: a hardcoded 10 asserts nothing about the invariant
+  // and simply breaks whenever a class is added, which is how it broke when
+  // usage_limit and access_denied were split out of the old catch-all 403.
+  const { ERROR_CLASSES } = require('../../src/shared/policy');
+  await expect(page.locator('#policyList .policy-row')).toHaveCount(ERROR_CLASSES.length);
 
   const billing = page.locator('.policy-row').filter({ hasText: 'Billing problem' });
   await expect(billing.locator('.chip')).toHaveText('alert only');
@@ -818,19 +822,27 @@ test('installing hooks leaves a user’s unrelated hooks untouched', async () =>
 
 /* ============================== coverage =============================== */
 
-test('the coverage tab lists all ten failure classes with their outcomes', async () => {
+test('the coverage tab lists every failure class with its outcome', async () => {
   const sandbox = fx.makeSandbox('coverage');
   ctx = await fx.launch(sandbox);
   await ctx.page.click('.nav-item[data-tab="coverage"]');
 
+  // One card per class, counted from the shared list — see the note on the
+  // per-failure tuning test above for why this is not a literal.
+  const { ERROR_CLASSES } = require('../../src/shared/policy');
   const cards = ctx.page.locator('#coverageClasses .cov-card');
-  await expect(cards).toHaveCount(10);
+  await expect(cards).toHaveCount(ERROR_CLASSES.length);
 
   // The retry asymmetry is the design's core claim, so it must be visible.
   await expect(cards.filter({ hasText: 'Rate limited' })).toContainText('Auto-resume');
   await expect(cards.filter({ hasText: 'Context overflow' })).toContainText('Compact + resume');
   await expect(cards.filter({ hasText: 'Authentication failed' })).toContainText('Alert you');
   await expect(cards.filter({ hasText: 'Billing problem' })).toContainText('Alert you');
+  // The two classes that a 403 used to hide behind each other. Both alert rather
+  // than retry, but for opposite reasons — one is a permissions problem and one is
+  // a limit that clears — so both must be on the page in their own right.
+  await expect(cards.filter({ hasText: 'Usage limit reached' })).toContainText('Alert you');
+  await expect(cards.filter({ hasText: 'Access denied' })).toContainText('Alert you');
 
   // State is carried on the card, so "covered" is legible at a glance.
   await expect(cards.filter({ hasText: 'Rate limited' })).toHaveAttribute('data-on', 'true');
