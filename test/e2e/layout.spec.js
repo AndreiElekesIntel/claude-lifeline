@@ -386,6 +386,191 @@ test('top-level sections keep a real gap, through the full scroll height', async
   expect(problems.join('\n')).toBe('');
 });
 
+/* ================= every drawn box keeps its distance ================= */
+
+/**
+ * Card-like boxes never touch, at any depth on any page.
+ *
+ * The section test above only walks a handful of named containers, because at the
+ * time the faults it was written for were all top-level seams. That leaves the
+ * inside of every panel unmeasured — and a box drawn *inside* one is exactly as
+ * broken when it shares an edge with its neighbour.
+ *
+ * "Box" is narrowed to something that visibly reads as a card: a rounded corner
+ * plus either a border on all four sides or a fill of its own. That deliberately
+ * excludes the two things whose tight stacking is correct — table rows, which are
+ * separated by a shared divider and have no radius, and toggle rows, which are
+ * rounded but transparent until hovered, so a 2px stack reads as one list rather
+ * than as several touching cards.
+ */
+test('no two drawn boxes touch, anywhere on any page', async () => {
+  const sandbox = fx.makeSandbox('boxes');
+  seedAll(sandbox);
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  /** Below this, two bordered cards read as one box with a line through it. */
+  const MIN_GAP = 4;
+  const problems = [];
+
+  for (const vp of WIDTHS) {
+    await page.setViewportSize({ width: vp.width, height: vp.height });
+    for (const tab of TABS) {
+      await openTab(page, tab);
+
+      const found = await page.evaluate((minGap) => {
+        const out = [];
+        const root = document.querySelector('.tab.active') || document.querySelector('.tab:not(.hidden)');
+        if (!root) return out;
+
+        const label = (el) => {
+          const id = el.id ? `#${el.id}` : '';
+          const cls = typeof el.className === 'string' && el.className ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}` : '';
+          return `${el.tagName.toLowerCase()}${id}${cls}`;
+        };
+        const transparent = (c) => !c || c === 'transparent' || /rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(c);
+
+        /**
+         * Does this element draw itself as a card?
+         *
+         * The border must be a *visible* colour, not merely declared. Timeline and
+         * toggle rows carry `1px solid transparent` so that revealing a border on
+         * hover does not shift the row by a pixel — measuring declared width alone
+         * counted those as cards and flagged the deliberate 2px list stacking.
+         */
+        const isBox = (el, cs) => {
+          if (parseFloat(cs.borderTopLeftRadius) < 3) return false;
+          const bordered = ['Top', 'Right', 'Bottom', 'Left'].every(
+            (s) => cs[`border${s}Style`] !== 'none' && parseFloat(cs[`border${s}Width`]) > 0 && !transparent(cs[`border${s}Color`])
+          );
+          return bordered || !transparent(cs.backgroundColor);
+        };
+
+        for (const parent of [root, ...root.querySelectorAll('*')]) {
+          const pcs = getComputedStyle(parent);
+          // Vertical stacks only: in a wrapping row, "sits 0px from" is what a
+          // row of chips is supposed to look like.
+          const stacked = pcs.display === 'block' || (pcs.display === 'flex' && pcs.flexDirection === 'column');
+          if (!stacked) continue;
+
+          const kids = Array.from(parent.children).filter((el) => {
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return false;
+            if (cs.position === 'absolute' || cs.position === 'fixed' || cs.position === 'sticky') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && isBox(el, cs);
+          });
+
+          for (let i = 0; i < kids.length - 1; i++) {
+            const a = kids[i].getBoundingClientRect();
+            const b = kids[i + 1].getBoundingClientRect();
+            const sharesX = Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2;
+            if (!sharesX) continue;
+            const gap = b.top - a.bottom;
+            if (gap < minGap) {
+              out.push({ gap: Math.round(gap), parent: label(parent), a: label(kids[i]), b: label(kids[i + 1]) });
+            }
+          }
+        }
+        return out;
+      }, MIN_GAP);
+
+      for (const f of found) {
+        const msg = `inside ${f.parent}, ${f.a} sits ${f.gap}px from ${f.b} (min ${MIN_GAP}px)`;
+        if (!problems.some((p) => p.endsWith(msg))) problems.push(`${vp.name}/${tab}: ${msg}`);
+      }
+    }
+  }
+
+  expect(problems.join('\n')).toBe('');
+});
+
+/* ============== empty states are laid out, not just present ============== */
+
+/**
+ * What an empty page looks like, which nothing else in this file sees.
+ *
+ * Every other test seeds data so each tab renders real content — which is the
+ * right default, and also means the empty states are only ever measured on the
+ * one tab that has no data to seed. Launchpad's shipped with its "Create the
+ * first one" button flush against the sentence above it for exactly that reason:
+ * the button was present, clickable, and never looked at.
+ *
+ * This is also the first thing a new user sees, so it is worth more than the
+ * "it exists" assertion it had.
+ */
+test('an empty page gives its call to action room to breathe', async () => {
+  // Deliberately not seeded: an empty sandbox is the point.
+  const sandbox = fx.makeSandbox('emptyui');
+  ctx = await fx.launch(sandbox);
+  const { page } = ctx;
+
+  await page.setViewportSize({ width: 1180, height: 800 });
+  const problems = [];
+
+  for (const tab of TABS) {
+    // Not openTab(): its Analytics and History waits are for *rows*, which is
+    // precisely what an empty sandbox never produces. Waiting for the empty state
+    // itself is the equivalent settled signal here.
+    await page.click(`.nav-item[data-tab="${tab}"]`);
+    await expect(page.locator(`.tab[data-tab="${tab}"]`)).toBeVisible();
+    if (tab === 'analytics' || tab === 'history') {
+      await expect(page.locator(`.tab[data-tab="${tab}"] .empty:not(.hidden)`).first()).toBeVisible({ timeout: 20_000 });
+    }
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const found = await page.evaluate(() => {
+      const out = [];
+      const root = document.querySelector('.tab.active') || document.querySelector('.tab:not(.hidden)');
+      if (!root) return out;
+
+      for (const empty of root.querySelectorAll('.empty')) {
+        const cs = getComputedStyle(empty);
+        if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+        const box = empty.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) continue;
+
+        const kids = Array.from(empty.children).filter((el) => {
+          const k = getComputedStyle(el);
+          if (k.display === 'none' || k.visibility === 'hidden') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+
+        for (let i = 0; i < kids.length - 1; i++) {
+          const a = kids[i].getBoundingClientRect();
+          const b = kids[i + 1].getBoundingClientRect();
+          const gap = b.top - a.bottom;
+          // A button needs clearly more air than two lines of prose do: it is a
+          // different kind of thing, and 3px reads as an accident.
+          const min = kids[i + 1].tagName === 'BUTTON' ? 8 : 1;
+          if (gap < min) {
+            out.push(`${kids[i].tagName.toLowerCase()} sits ${Math.round(gap)}px from ${kids[i + 1].tagName.toLowerCase()} (min ${min}px)`);
+          }
+        }
+
+        // Centred prose, centred art, centred button — and a button hard against
+        // the left edge would mean the flex column lost its cross-axis centring.
+        for (const kid of kids) {
+          const r = kid.getBoundingClientRect();
+          const offCentre = Math.abs((r.left + r.right) / 2 - (box.left + box.right) / 2);
+          if (offCentre > 2) out.push(`${kid.tagName.toLowerCase()} is ${Math.round(offCentre)}px off the centre of its empty state`);
+        }
+
+        // Padding, so the box is not a wall of text against its own border.
+        for (const side of ['Top', 'Bottom', 'Left', 'Right']) {
+          if (parseFloat(cs[`padding${side}`]) < 12) out.push(`.${empty.id || 'empty'} has only ${cs[`padding${side}`]} of ${side.toLowerCase()} padding`);
+        }
+      }
+      return out;
+    });
+
+    for (const f of found) problems.push(`${tab}: ${f}`);
+  }
+
+  expect(problems.join('\n')).toBe('');
+});
+
 /* ============ headings are not flush against their body text ============ */
 
 test('a heading is never flush against the text below it', async () => {

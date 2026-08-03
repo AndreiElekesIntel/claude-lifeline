@@ -22,7 +22,7 @@
  * fails at midnight.
  */
 
-const { unionMs } = require('./analytics');
+const { unionMs, splitByDay } = require('./analytics');
 
 /** Local-date key. Local, not UTC: a session at 01:00 belongs to that morning. */
 function dayKey(ts) {
@@ -80,39 +80,95 @@ function matches(session, query) {
   return terms.every((t) => hay.includes(t));
 }
 
+/** Every token class a session records, added up. */
+function totalTokens(s) {
+  const t = s.tokens || {};
+  return (t.input || 0) + (t.output || 0) + (t.cacheWrite || 0) + (t.cacheRead || 0);
+}
+
 /**
  * Group sessions into days, newest first.
  *
- * A session is filed under the day it was *last* worked in, not the day it
- * started: an overnight run belongs to the morning you found it finished, which is
- * where you would look for it.
+ * A session is *listed* under the day it was last worked in — an overnight run
+ * belongs to the morning you found it finished, which is where you would look for
+ * it. But its **cost and tokens are apportioned across every day it actually
+ * spanned**, in proportion to the time measured in each.
+ *
+ * Those two rules being different is deliberate, and the reason is that they
+ * answer different questions. "Where do I click to find that session again?" wants
+ * one row in one place. "What did Tuesday cost me?" wants Tuesday's share of the
+ * spend, and a session that ran from Tuesday evening to Wednesday morning did not
+ * spend all its money on either side of midnight.
+ *
+ * Previously the day header summed each listed session's full cost, which made the
+ * figure wrong in a way that was easy to miss: it double-reported nothing, but it
+ * moved money between days, and it disagreed with the Analytics tab — which keyed
+ * on the start day instead — for the same session. See splitByDay() for the
+ * measured divergence and why time is the proxy used.
+ *
+ * `attributedCostUsd` on each row is that session's share for the day it appears
+ * under, so the rows and the header add up to the same number.
  */
 function groupByDay(sessions, { query = '', now = Date.now() } = {}) {
+  /** key -> {rows, spans, costUsd, tokens, split} */
   const byDay = new Map();
+  const dayOf = (key) => {
+    if (!byDay.has(key)) byDay.set(key, { rows: [], spans: [], costUsd: 0, tokens: 0, split: false });
+    return byDay.get(key);
+  };
 
   for (const s of sessions || []) {
     if (!s || !s.lastAt) continue; // never worked in; nothing to file
     if (!matches(s, query)) continue;
-    const key = dayKey(s.lastAt);
-    if (!byDay.has(key)) byDay.set(key, []);
-    byDay.get(key).push(s);
+
+    const homeKey = dayKey(s.lastAt);
+    const parts = splitByDay(s, { fallbackAt: s.lastAt });
+    const cost = s.costUsd || 0;
+    const tokens = totalTokens(s);
+
+    for (const part of parts) {
+      const bucket = dayOf(part.key);
+      bucket.costUsd += cost * part.share;
+      bucket.tokens += tokens * part.share;
+      for (const span of part.spans) bucket.spans.push(span);
+      // Flagged on every day a multi-day session touches, so the UI can explain a
+      // header total that is smaller than the row beneath it.
+      if (parts.length > 1) bucket.split = true;
+    }
+
+    /**
+     * The row itself is listed once, under `lastAt`.
+     *
+     * Repeating it on each spanned day would make the same work look like several
+     * sessions, and the count above the list would stop matching the number of
+     * sessions that exist.
+     */
+    const home = dayOf(homeKey);
+    const homePart = parts.find((p) => p.key === homeKey);
+    home.rows.push({
+      ...s,
+      /** This day's share of the session's spend — what the header counted. */
+      attributedCostUsd: cost * (homePart ? homePart.share : 1),
+      /** True when some of this session's spend is counted on other days. */
+      spansDays: parts.length > 1,
+    });
   }
 
   const groups = [];
-  for (const [key, rows] of byDay) {
+  for (const [key, bucket] of byDay) {
+    const rows = bucket.rows;
     rows.sort((a, b) => b.lastAt - a.lastAt);
 
     // Unioned, not summed. Concurrent sessions share wall-clock time, so summing
     // `activeMs` across a day can exceed 24 hours — and does, routinely, for
     // anyone who runs several agents at once.
-    const spans = [];
-    for (const s of rows) {
-      for (const iv of s.intervals || []) spans.push(iv);
-    }
+    //
     // `intervals` are dropped from the IPC payload for size, so fall back to the
     // per-session sum when they are absent. It over-reports overlap, which is why
     // `overlapping` says which figure this is.
-    const activeMs = spans.length ? unionMs(spans) : rows.reduce((sum, s) => sum + (s.activeMs || 0), 0);
+    const activeMs = bucket.spans.length
+      ? unionMs(bucket.spans)
+      : rows.reduce((sum, s) => sum + (s.activeMs || 0), 0);
 
     groups.push({
       key,
@@ -121,14 +177,23 @@ function groupByDay(sessions, { query = '', now = Date.now() } = {}) {
       count: rows.length,
       activeMs,
       /** True when the day's time is a sum of overlapping sessions, not a union. */
-      overlapping: spans.length === 0 && rows.length > 1,
-      costUsd: rows.reduce((sum, s) => sum + (s.costUsd || 0), 0),
-      tokens: rows.reduce((sum, s) => {
-        const t = s.tokens || {};
-        return sum + (t.input || 0) + (t.output || 0) + (t.cacheWrite || 0) + (t.cacheRead || 0);
-      }, 0),
+      overlapping: bucket.spans.length === 0 && rows.length > 1,
+      costUsd: bucket.costUsd,
+      tokens: Math.round(bucket.tokens),
+      /**
+       * True when at least one session's spend is shared with another day, so the
+       * header can say why it does not equal the sum of the rows shown.
+       */
+      split: bucket.split,
     });
   }
+
+  /**
+   * A day that only received apportioned cost — no session is *listed* there —
+   * still belongs in the output, because its money was really spent then. Dropping
+   * it would make the day totals stop summing to the grand total, which is the
+   * exact class of bug this function was fixed for.
+   */
 
   // Newest day first. Sorting the keys as strings works because `YYYY-MM-DD` is
   // lexicographically ordered, which is the whole reason for that format.

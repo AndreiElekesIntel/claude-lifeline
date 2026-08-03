@@ -14,6 +14,30 @@
  *
  *   node scripts/cli.mjs statusline-on / statusline-off
  *                                    show session state inside Claude Code itself
+ *
+ * ## Controlling the app from a terminal
+ *
+ *   node scripts/cli.mjs pause / resume     the master switch
+ *   node scripts/cli.mjs sessions           what is running right now
+ *   node scripts/cli.mjs log [n]            recent events
+ *   node scripts/cli.mjs cost [days]        what it has cost
+ *   node scripts/cli.mjs launch <preset>    start a saved shortcut
+ *   node scripts/cli.mjs presets            list the shortcuts
+ *   node scripts/cli.mjs widget <name> on|off
+ *   node scripts/cli.mjs config [key [value]]
+ *
+ * ### Why these write config rather than talking to the app
+ *
+ * There is no IPC socket, and adding one would mean a listening port or a named
+ * pipe on every user's machine for the sake of a few commands. It is not needed:
+ * config.json *is* the interface. The app watches it and reloads, the hook reads it
+ * on every fire, and so a CLI write takes effect in both — including when the app
+ * is not running, which is the case an IPC channel would handle worst.
+ *
+ * The one thing this cannot do is make a window appear, since that needs a process
+ * with a screen. `launch` is the exception that works anyway: starting a session is
+ * spawning a terminal, which any process can do, so it goes through the same
+ * launcher the app's own buttons use.
  */
 
 import { createRequire } from 'node:module';
@@ -27,10 +51,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const installer = require(path.join(root, 'src/shared/installer.js'));
 const paths = require(path.join(root, 'src/shared/paths.js'));
-const { loadConfig } = require(path.join(root, 'src/shared/config.js'));
+const { loadConfig, saveConfig, deepMerge } = require(path.join(root, 'src/shared/config.js'));
 const eventlog = require(path.join(root, 'src/shared/eventlog.js'));
 const ledger = require(path.join(root, 'src/shared/ledger.js'));
 const sessions = require(path.join(root, 'src/shared/sessions.js'));
+const launcher = require(path.join(root, 'src/shared/launcher.js'));
+const launchpad = require(path.join(root, 'src/shared/launchpad.js'));
+const analytics = require(path.join(root, 'src/shared/analytics.js'));
 const { ERROR_CLASSES, effectivePolicy } = require(path.join(root, 'src/shared/policy.js'));
 
 const c = {
@@ -324,6 +351,304 @@ function cmdStatus() {
   return cfg.enabled && st.complete ? 0 : 1;
 }
 
+/* ========================= controlling the app ========================= */
+
+/**
+ * Write one dotted key into config.json.
+ *
+ * Merged over the loaded config rather than written raw, so a CLI change cannot
+ * drop a key the app added — see loadConfig's contract in config.js.
+ */
+function patchConfig(dotted, value) {
+  const parts = dotted.split('.');
+  const patch = {};
+  let node = patch;
+  for (let i = 0; i < parts.length - 1; i++) {
+    node[parts[i]] = {};
+    node = node[parts[i]];
+  }
+  node[parts[parts.length - 1]] = value;
+  const next = deepMerge(loadConfig(), patch);
+  saveConfig(next);
+  return next;
+}
+
+/** Read one dotted key, or undefined. */
+function readConfigPath(cfg, dotted) {
+  return dotted.split('.').reduce((node, k) => (node == null ? undefined : node[k]), cfg);
+}
+
+/**
+ * The master switch, from a terminal.
+ *
+ * Worth saying explicitly which sessions this affects: the hook reads config on
+ * every fire, so a pause applies to sessions that are already running — unlike
+ * installing a hook, which does not.
+ */
+function cmdPause() {
+  const cfg = loadConfig();
+  if (!cfg.enabled) {
+    console.log(warn('•') + ' Protection was already paused.');
+    return 0;
+  }
+  patchConfig('enabled', false);
+  eventlog.append({ kind: eventlog.KINDS.INFO, detail: 'Protection paused from the command line.' });
+  console.log(ok('✓') + ' Protection paused. Nothing will be resumed.');
+  console.log(dim('  This applies to sessions already running — the hook reads config on every failure.'));
+  console.log(dim('  Turn it back on: node scripts/cli.mjs resume'));
+  return 0;
+}
+
+function cmdResume() {
+  const cfg = loadConfig();
+  if (cfg.enabled) {
+    console.log(warn('•') + ' Protection was already on.');
+    return 0;
+  }
+  patchConfig('enabled', true);
+  eventlog.append({ kind: eventlog.KINDS.INFO, detail: 'Protection resumed from the command line.' });
+  console.log(ok('✓') + ' Protection on. Sessions will resume themselves after an API error.');
+  return 0;
+}
+
+/** Every live session, one per line. The `status` command's detail view. */
+function cmdSessions() {
+  const cfg = loadConfig();
+  const list = sessions.listSessions();
+  if (!list.length) {
+    console.log(dim('No sessions registered. Claude Code writes a record per session while it runs.'));
+    return 0;
+  }
+
+  const stalled = new Set(sessions.findStalled(list, cfg.limits.stalledAfterMs).map((s) => s.sessionId));
+  console.log(paint(c.bold, 'Sessions') + '\n');
+  for (const s of list) {
+    const state = !s.alive
+      ? bad('gone')
+      : stalled.has(s.sessionId)
+        ? warn('stalled')
+        : s.status === 'busy'
+          ? paint(c.cyan, 'working')
+          : ok('idle');
+    const idle = s.idleMs == null ? '' : dim(` last active ${humanAge(s.idleMs)}`);
+    const name = s.name || (s.cwd ? path.basename(s.cwd) : 'unknown');
+    console.log(`  ${state.padEnd(plain ? 8 : 17)} ${String(s.sessionId || '').slice(0, 8)}  ${name}${idle}`);
+  }
+  console.log('');
+  const sum = sessions.summarise(list, cfg.limits.stalledAfterMs);
+  console.log(dim(`${sum.alive} live, ${sum.busy} working, ${sum.stalled} stalled, ${sum.dead} died mid-task`));
+  return 0;
+}
+
+/** Rounded, human age of a duration in ms. */
+function humanAge(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ${m % 60}m ago` : `${Math.floor(h / 24)}d ago`;
+}
+
+/**
+ * Recent events, newest first.
+ *
+ * Includes `fix` where there is one: an alert whose whole purpose is to say what
+ * to do should say it here too, not only in the app's window.
+ */
+function cmdLog(argv) {
+  const limit = Math.min(Math.max(Number(argv[0]) || 20, 1), 500);
+  const events = eventlog.read(limit);
+  if (!events.length) {
+    console.log(dim('Nothing logged yet.'));
+    return 0;
+  }
+  const tone = { recovered: ok, notified: warn, blocked: bad, error: bad, skipped: dim, info: dim };
+  for (const e of events) {
+    const mark = (tone[e.kind] || dim)('•');
+    const when = new Date(e.at).toLocaleString();
+    console.log(`${mark} ${dim(when)}  ${e.label || e.errorClass || e.kind}`);
+    if (e.detail) console.log(`    ${e.detail}`);
+    if (e.fix) console.log(`    ${paint(c.cyan, '→')} ${e.fix}`);
+  }
+  return 0;
+}
+
+/**
+ * What Claude Code has cost, from the transcripts.
+ *
+ * A synchronous scan rather than the app's worker pool: a CLI invocation has
+ * nothing else to do while it waits, and reusing the app's cache would mean
+ * running its scheduler outside the app.
+ */
+function cmdCost(argv) {
+  const days = Math.min(Math.max(Number(argv[0]) || 30, 1), 3650);
+  const cfg = loadConfig();
+  if (!cfg.analytics.enabled) {
+    console.log(warn('•') + ' Analytics is turned off, so there is nothing to report.');
+    console.log(dim('  Turn it on: node scripts/cli.mjs config analytics.enabled true'));
+    return 1;
+  }
+
+  const sym = cfg.analytics.currencySymbol || '$';
+  const rep = analytics.report({ pricingOverrides: cfg.analytics.rates, sessionLimit: 100000 });
+  const series = analytics.dailySeries(rep.recent, days);
+  const cost = series.reduce((n, d) => n + d.costUsd, 0);
+  const active = series.reduce((n, d) => n + d.activeMs, 0);
+  const tokens = series.reduce((n, d) => n + d.tokens, 0);
+  const count = series.reduce((n, d) => n + d.sessions, 0);
+
+  console.log(paint(c.bold, `Last ${days} day${days === 1 ? '' : 's'}`) + '\n');
+  console.log(`  Sessions      ${count}`);
+  console.log(`  Active time   ${humanDuration(active)}`);
+  console.log(`  Tokens        ${tokens.toLocaleString()}`);
+  console.log(`  Estimated     ${sym}${cost.toFixed(2)}`);
+  console.log('');
+  console.log(dim(`All time: ${sym}${rep.totals.all.costUsd.toFixed(2)} across ${rep.totals.all.sessions} sessions.`));
+  // Said once, plainly: this is arithmetic on token counts, not a bill.
+  console.log(dim('Derived from token counts at published rates — Claude Code records tokens, not money.'));
+  return 0;
+}
+
+function humanDuration(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/** The saved shortcuts, with the ids `launch` takes. */
+function cmdPresets() {
+  const list = launchpad.listPresets(loadConfig());
+  if (!list.length) {
+    console.log(dim('No shortcuts saved. Create them on the Launchpad tab.'));
+    return 0;
+  }
+  console.log(paint(c.bold, 'Shortcuts') + '\n');
+  for (const p of list) {
+    console.log(`  ${paint(c.cyan, p.id.padEnd(14))} ${p.label}`);
+    const bits = [p.cwd, p.model, p.permissionMode].filter(Boolean);
+    if (bits.length) console.log(`  ${' '.repeat(14)} ${dim(bits.join('  ·  '))}`);
+  }
+  console.log('');
+  console.log(dim('Start one: node scripts/cli.mjs launch <id>'));
+  return 0;
+}
+
+/**
+ * Start a saved shortcut, or a bare session in a folder.
+ *
+ * Goes through launcher.launch, which is the same path the app's buttons use — so
+ * argv still travels as JSON on disk rather than through a shell. That matters
+ * most here: a preset's pre-prompt is prose, and wt.exe or cmd.exe would mangle or
+ * execute parts of it. See launcher.js.
+ */
+function cmdLaunch(argv) {
+  const which = String(argv[0] || '').trim();
+  if (!which) {
+    console.error(bad('✗ ') + 'Which shortcut? Run `presets` to see the ids.');
+    return 2;
+  }
+
+  const cfg = loadConfig();
+  const preset = launchpad.findPreset(cfg, which)
+    // Convenience: name it by label as well as id, since the label is what is on
+    // the button and the id is a generated string nobody memorises.
+    || launchpad.listPresets(cfg).find((p) => p.label.toLowerCase() === which.toLowerCase());
+
+  if (!preset) {
+    console.error(bad('✗ ') + `No shortcut called "${which}".`);
+    console.error(dim('  Run `node scripts/cli.mjs presets` to see what exists.'));
+    return 1;
+  }
+
+  const res = launcher.launch(preset, { node: process.execPath });
+  console.log(ok('✓') + ` Starting ${preset.label}${preset.cwd ? dim(`  in ${preset.cwd}`) : ''}`);
+  console.log(dim(`  via ${res.via}`));
+  eventlog.append({ kind: eventlog.KINDS.INFO, detail: `Started "${preset.label}" from the command line.`, cwd: preset.cwd || null });
+  return 0;
+}
+
+/** The two desktop widgets. Config-only, so the app picks the change up live. */
+function cmdWidget(argv) {
+  const names = ['shortcuts', 'status'];
+  const name = String(argv[0] || '').toLowerCase();
+  const verb = String(argv[1] || '').toLowerCase();
+
+  if (!names.includes(name) || !['on', 'off'].includes(verb)) {
+    console.error(bad('✗ ') + 'Usage: widget <shortcuts|status> <on|off>');
+    const cfg = loadConfig();
+    for (const n of names) {
+      console.error(dim(`  ${n.padEnd(10)} currently ${cfg.widgets[n].enabled ? 'on' : 'off'}`));
+    }
+    return 2;
+  }
+
+  patchConfig(`widgets.${name}.enabled`, verb === 'on');
+  console.log(ok('✓') + ` The ${name} widget is ${verb}.`);
+  if (verb === 'on') console.log(dim('  It appears on the desktop when the app is running.'));
+  return 0;
+}
+
+/**
+ * Read or write any config key, for the things that have no dedicated command.
+ *
+ * Deliberately typed rather than string-only: `true` written as the string "true"
+ * is a value the schema does not expect, and every consumer treats a non-empty
+ * string as truthy — so `config enabled false` would have *enabled* protection.
+ * That is the kind of failure a config editor must not have.
+ */
+function cmdConfig(argv) {
+  const cfg = loadConfig();
+  const key = argv[0];
+
+  if (!key) {
+    // No key: the whole file, which is the useful default for a config command.
+    console.log(JSON.stringify(cfg, null, 2));
+    return 0;
+  }
+
+  if (argv.length < 2) {
+    const value = readConfigPath(cfg, key);
+    if (value === undefined) {
+      console.error(bad('✗ ') + `No such setting: ${key}`);
+      return 1;
+    }
+    console.log(typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value));
+    return 0;
+  }
+
+  const current = readConfigPath(cfg, key);
+  if (current === undefined) {
+    console.error(bad('✗ ') + `No such setting: ${key}`);
+    console.error(dim('  Run `node scripts/cli.mjs config` to see every key.'));
+    return 1;
+  }
+  if (current !== null && typeof current === 'object') {
+    console.error(bad('✗ ') + `${key} is a section, not a single setting.`);
+    return 1;
+  }
+
+  const raw = argv.slice(1).join(' ');
+  let value = raw;
+  if (typeof current === 'boolean') {
+    if (!/^(true|false|on|off|yes|no|1|0)$/i.test(raw)) {
+      console.error(bad('✗ ') + `${key} is a switch — pass true or false.`);
+      return 1;
+    }
+    value = /^(true|on|yes|1)$/i.test(raw);
+  } else if (typeof current === 'number') {
+    value = Number(raw);
+    if (!Number.isFinite(value)) {
+      console.error(bad('✗ ') + `${key} is a number, and "${raw}" is not one.`);
+      return 1;
+    }
+  }
+
+  patchConfig(key, value);
+  console.log(ok('✓') + ` ${key}: ${dim(String(current))} → ${String(value)}`);
+  return 0;
+}
+
 const commands = {
   install: cmdInstall,
   uninstall: cmdUninstall,
@@ -332,29 +657,58 @@ const commands = {
   status: cmdStatus,
   'statusline-on': cmdStatuslineInstall,
   'statusline-off': cmdStatuslineUninstall,
+  pause: cmdPause,
+  resume: cmdResume,
+  sessions: cmdSessions,
+  log: cmdLog,
+  cost: cmdCost,
+  presets: cmdPresets,
+  launch: cmdLaunch,
+  widget: cmdWidget,
+  config: cmdConfig,
 };
 const cmd = process.argv[2];
 
 if (!cmd || cmd === '--help' || cmd === '-h') {
   console.log(`Claude Lifeline
 
+Setup
   install         register the recovery hooks with Claude Code
   uninstall       remove them
   pin             snapshot the recovery code and run hooks from that copy
   statusline-on   show session state as a dot inside Claude Code itself
   statusline-off  restore whatever statusline you had before
+
+Checking
   doctor          verify every link in the recovery chain
-  status          one-line summary`);
+  status          one-line summary
+  sessions        every live session and what it is doing
+  log [n]         recent events, newest first (default 20)
+  cost [days]     time, tokens and estimated spend (default 30)
+
+Controlling
+  pause           stop resuming sessions, including ones already running
+  resume          start again
+  launch <id>     start a saved shortcut
+  presets         list the saved shortcuts and their ids
+  widget <shortcuts|status> <on|off>
+  config [key [value]]
+                  read or write any setting; no arguments prints them all
+
+These write config.json, which the app watches and the hook reads on every
+failure — so they work whether or not the app is running.`);
   process.exit(0);
 }
 
 if (!commands[cmd]) {
   console.error(bad(`Unknown command: ${cmd}`));
+  console.error(dim('Run with --help to see what exists.'));
   process.exit(2);
 }
 
 try {
-  process.exit(commands[cmd]());
+  // Everything after the command name, so a command can take arguments.
+  process.exit(commands[cmd](process.argv.slice(3)));
 } catch (err) {
   console.error(bad('✗ ') + err.message);
   process.exit(1);

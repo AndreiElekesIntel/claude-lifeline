@@ -167,16 +167,42 @@ function projectName(cwd) {
   return parts[parts.length - 1] || cwd;
 }
 
-function toast(message, tone = 'info') {
+/**
+ * A transient message, optionally with one thing to do about it.
+ *
+ * `action` exists for refusals that have an obvious alternative — the case that
+ * forced it is History's Resume on a session that is still running, which used to
+ * explain the problem and leave the user with nowhere to go. A toast carrying the
+ * way forward turns that into a choice.
+ *
+ * An action holds the toast longer: 3.6s is enough to read a confirmation, not
+ * enough to read a refusal and decide on a button.
+ */
+function toast(message, tone = 'info', action = null) {
   const host = $('#toastHost');
-  const t = el('div', `toast ${tone}`);
+  const t = el('div', `toast ${tone}${action ? ' has-action' : ''}`);
   t.appendChild(el('div', 'bar'));
   t.appendChild(el('span', null, message));
-  host.appendChild(t);
-  setTimeout(() => {
+
+  let timer = null;
+  const dismiss = () => {
+    if (timer) clearTimeout(timer);
     t.classList.add('out');
     setTimeout(() => t.remove(), 220);
-  }, 3600);
+  };
+
+  if (action && action.label && typeof action.onClick === 'function') {
+    const btn = el('button', 'toast-action', action.label);
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      dismiss();
+      action.onClick();
+    });
+    t.appendChild(btn);
+  }
+
+  host.appendChild(t);
+  timer = setTimeout(dismiss, action ? 9000 : 3600);
 }
 
 /* ============================== theming =============================== */
@@ -345,6 +371,22 @@ function renderTimeline(host, events, empty) {
     body.appendChild(title);
 
     if (e.detail) body.appendChild(el('div', 'tl-detail', e.detail));
+    /**
+     * What to do about it, styled apart from the diagnosis above.
+     *
+     * Only notify-class events carry one. It matters most for `access_denied`,
+     * where Claude Code's own message says "Please run /login" and that is the
+     * wrong advice — the sign-in worked, the call was refused.
+     */
+    if (e.fix) body.appendChild(el('div', 'tl-fix', e.fix));
+    /**
+     * The provider's own words, kept verbatim and last.
+     *
+     * Lifeline's classification is a summary, and a summary can be wrong. The
+     * original text is what someone pastes into a support ticket or searches for,
+     * so it stays available rather than being replaced by the interpretation.
+     */
+    if (e.rawError) body.appendChild(el('div', 'tl-raw', e.rawError));
 
     const meta = el('div', 'tl-meta');
     if (e.cwd) meta.appendChild(el('span', null, projectName(e.cwd)));
@@ -463,6 +505,9 @@ function renderCoverageClasses() {
     card.appendChild(head);
 
     card.appendChild(el('div', 'cov-card-why', meta.reason));
+    // Notify classes only: when Lifeline will not act, the card should say what
+    // the user has to do instead.
+    if (meta.fix) card.appendChild(el('div', 'cov-card-fix', meta.fix));
 
     const foot = el('div', 'cov-card-foot');
     foot.appendChild(el('span', `chip ${STRATEGY_TONE[resolved.strategy] || ''}`, STRATEGY_TEXT[resolved.strategy] || resolved.strategy));
@@ -1578,13 +1623,33 @@ function historyRow(s) {
   return row;
 }
 
-/** Ask main to reopen a session, and say what happened either way. */
-async function resumeSession(s, btn) {
+/**
+ * Ask main to reopen a session, and say what happened either way.
+ *
+ * `fresh` starts a new session in the same folder instead of resuming. It is only
+ * ever reached from the button on the "still running" refusal below — resuming a
+ * live session would put two processes on one transcript, but a *new* session
+ * beside it is safe and is usually what was wanted.
+ */
+async function resumeSession(s, btn, { fresh = false } = {}) {
   if (btn) btn.disabled = true;
   try {
-    const res = await api.resumeSession(s.sessionId);
-    if (res && res.ok) toast(`Opening ${sessionTitle(s)}…`, 'ok');
-    else toast((res && res.reason) || 'Could not resume that session.', 'warn');
+    const res = await api.resumeSession(s.sessionId, { fresh });
+    if (res && res.ok) {
+      toast(res.fresh ? `Starting a new session in ${projectName(s.cwd)}…` : `Opening ${sessionTitle(s)}…`, 'ok');
+      return;
+    }
+
+    // Still running: offer the safe alternative rather than stopping here.
+    if (res && res.code === 'still_running' && res.canStartFresh) {
+      toast(res.reason, 'warn', {
+        label: `Start a new one in ${res.project || projectName(s.cwd)}`,
+        onClick: () => resumeSession(s, btn, { fresh: true }),
+      });
+      return;
+    }
+
+    toast((res && res.reason) || 'Could not resume that session.', 'warn');
   } catch (err) {
     toast(`Could not resume: ${err.message}`, 'danger');
   } finally {
@@ -1964,18 +2029,42 @@ const ADVANCED_COPY = {
   debugLogging: ['Verbose hook logging', 'Write every hook decision to hook.log. Useful when diagnosing why a session was not resumed.'],
 };
 
-/** Settings sections, in page order, for the jump list. */
-const SETTINGS_SECTIONS = [
-  ['setInstall', 'Installation'],
-  ['setSafety', 'Safety limits'],
-  ['setPolicy', 'Per-failure tuning'],
-  ['setAnalytics', 'Analytics & cost'],
-  ['setNotify', 'Notifications'],
-  ['setAppearance', 'Appearance'],
-  ['setWidgets', 'Desktop widgets'],
-  ['setScope', 'Project scope'],
-  ['setAdvanced', 'Advanced'],
+/**
+ * Settings sections, in page order, grouped for the jump list.
+ *
+ * Nine groups in one flat column was a list, not an organisation: "Safety limits"
+ * and "Per-failure tuning" both answer *how recovery behaves*, while "Appearance"
+ * and "Desktop widgets" have nothing to do with either, and the jump list gave no
+ * hint which was which. The bands below name the question each cluster answers, in
+ * the order someone actually meets them — get it working, tune what it does, then
+ * how it tells you, then how it looks, then the parts to leave alone.
+ *
+ * The order here is the page order, and `renderSettingsNav()` asserts nothing
+ * about it: the page markup carries matching band headings, so if the two drift
+ * the jump list is still correct, just grouped oddly.
+ */
+const SETTINGS_BANDS = [
+  ['Recovery', [
+    ['setInstall', 'Installation'],
+    ['setSafety', 'Safety limits'],
+    ['setPolicy', 'Per-failure tuning'],
+  ]],
+  ['Reporting', [
+    ['setAnalytics', 'Analytics & cost'],
+    ['setNotify', 'Notifications'],
+  ]],
+  ['This window', [
+    ['setAppearance', 'Appearance'],
+    ['setWidgets', 'Desktop widgets'],
+  ]],
+  ['Machine', [
+    ['setScope', 'Project scope'],
+    ['setAdvanced', 'Advanced'],
+  ]],
 ];
+
+/** The same sections, flat, for anything that just wants page order. */
+const SETTINGS_SECTIONS = SETTINGS_BANDS.flatMap(([, sections]) => sections);
 
 /** Read a nested path like 'limits.cooldownMs'. */
 function patchFor(path, value) {
@@ -2121,26 +2210,35 @@ function renderSettings() {
 function renderSettingsNav() {
   const host = $('#settingsNav');
   host.replaceChildren();
-  for (const [id, label] of SETTINGS_SECTIONS) {
-    const btn = el('button', 'settings-nav-item', label);
-    // Copy the group's rail colour onto its jump-list entry, so the two are
-    // visibly paired. Read from the group rather than duplicated here — the
-    // colours are defined once, in the stylesheet, keyed by the same id.
-    const group = document.getElementById(id);
-    if (group) {
-      const rail = getComputedStyle(group).getPropertyValue('--rail').trim();
-      if (rail) btn.style.setProperty('--rail', rail);
-    }
-    btn.addEventListener('click', () => {
-      const target = document.getElementById(id);
-      if (!target) return;
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      // Brief highlight: after a scroll the eye needs telling where it landed.
-      target.classList.add('flash');
-      setTimeout(() => target.classList.remove('flash'), 1200);
-    });
-    host.appendChild(btn);
+  for (const [band, sections] of SETTINGS_BANDS) {
+    const group = el('div', 'settings-nav-band');
+    group.appendChild(el('span', 'settings-nav-band-label', band));
+    const row = el('div', 'settings-nav-row');
+    for (const [id, label] of sections) row.appendChild(settingsNavItem(id, label));
+    group.appendChild(row);
+    host.appendChild(group);
   }
+}
+
+function settingsNavItem(id, label) {
+  const btn = el('button', 'settings-nav-item', label);
+  // Copy the group's rail colour onto its jump-list entry, so the two are
+  // visibly paired. Read from the group rather than duplicated here — the
+  // colours are defined once, in the stylesheet, keyed by the same id.
+  const group = document.getElementById(id);
+  if (group) {
+    const rail = getComputedStyle(group).getPropertyValue('--rail').trim();
+    if (rail) btn.style.setProperty('--rail', rail);
+  }
+  btn.addEventListener('click', () => {
+    const target = document.getElementById(id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Brief highlight: after a scroll the eye needs telling where it landed.
+    target.classList.add('flash');
+    setTimeout(() => target.classList.remove('flash'), 1200);
+  });
+  return btn;
 }
 
 /* ========================== desktop widgets ============================= */
@@ -2741,17 +2839,26 @@ function renderAbout() {
   const hooks = state.hooks || { events: [], expected: [] };
   const { enabled, total } = coverageCounts();
   const rows = [
-    [`${(hooks.events || []).length}/${(hooks.expected || []).length}`, 'hooks registered'],
-    [`${enabled}/${total}`, 'checks enabled'],
+    [`${(hooks.events || []).length}/${(hooks.expected || []).length}`, 'hooks registered', null],
+    [`${enabled}/${total}`, 'checks enabled', null],
     // From the event log, like the dashboard's count — not from the ledger, which
     // is pruned to 48 hours and so read as zero next to a visible timeline.
-    [String(state.stats.recoveredLogged ?? state.stats.recoveredToday ?? 0), 'recoveries logged'],
-    [state.config.enabled ? 'Active' : 'Paused', 'protection'],
+    [String(state.stats.recoveredLogged ?? state.stats.recoveredToday ?? 0), 'recoveries logged', null],
+    [state.config.enabled ? 'Active' : 'Paused', 'protection', null],
+    // What Lifeline cost to write, in the same units the Analytics tab reports
+    // everyone else's work in. `money()` shortens it for display; the exact
+    // figure goes in the sub-line, because four decimal places is the honest
+    // precision of a per-million-token rate and rounding it hides the fact that
+    // this number is bumped session by session.
+    ...(typeof state.buildCostUsd === 'number'
+      ? [[money(state.buildCostUsd), 'cost to build', `${currencySymbol()}${state.buildCostUsd.toFixed(4)} of Claude Opus 5`]]
+      : []),
   ];
-  for (const [value, label] of rows) {
+  for (const [value, label, sub] of rows) {
     const box = el('div', 'hero-metric');
     box.appendChild(el('span', 'hero-metric-num', value));
     box.appendChild(el('span', 'hero-metric-label', label));
+    if (sub) box.appendChild(el('span', 'hero-metric-sub', sub));
     metrics.appendChild(box);
   }
 
@@ -2804,6 +2911,20 @@ function renderAbout() {
       row.addEventListener('click', () => api.openPath(target));
     }
     host.appendChild(row);
+  }
+
+  // The exact figure, in the credit that explains what it bought. The hero
+  // metric above rounds for scanning; this is the one to quote.
+  const builtCost = $('#builtCost');
+  builtCost.replaceChildren();
+  const hasCost = typeof state.buildCostUsd === 'number';
+  // Toggled rather than only ever hidden: an empty flex row with a top border
+  // would still draw a rule under the paragraph with nothing beneath it.
+  builtCost.classList.toggle('hidden', !hasCost);
+  if (hasCost) {
+    builtCost.appendChild(el('span', 'built-cost-num', `${currencySymbol()}${state.buildCostUsd.toFixed(4)}`));
+    builtCost.appendChild(el('span', 'built-cost-label', 'of API spend across every session that wrote it'));
+    builtCost.appendChild(el('span', 'built-cost-note', 'kept up to date by hand, session by session'));
   }
 
   const foot = $('#aboutFoot');

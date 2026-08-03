@@ -514,8 +514,12 @@ test('per-failure tuning is disabled for classes that never retry', async () => 
   const { page } = ctx;
   await page.click('.nav-item[data-tab="settings"]');
 
-  // All ten real error classes must be tunable.
-  await expect(page.locator('#policyList .policy-row')).toHaveCount(10);
+  // Every real error class must be tunable. Counted from the shared list rather
+  // than written as a literal: a hardcoded 10 asserts nothing about the invariant
+  // and simply breaks whenever a class is added, which is how it broke when
+  // usage_limit and access_denied were split out of the old catch-all 403.
+  const { ERROR_CLASSES } = require('../../src/shared/policy');
+  await expect(page.locator('#policyList .policy-row')).toHaveCount(ERROR_CLASSES.length);
 
   const billing = page.locator('.policy-row').filter({ hasText: 'Billing problem' });
   await expect(billing.locator('.chip')).toHaveText('alert only');
@@ -681,8 +685,20 @@ test('navigation reaches every tab and the about tab lists real paths', async ()
   // Read off the sidebar rather than hard-coded, so adding a tab without wiring
   // its section — the exact bug History and Launchpad shipped with first — fails
   // here instead of being invisible until someone clicks it.
+  //
+  // Compared as a set, not a sequence: the sidebar is grouped now (Now / Looking
+  // back / Set up), and which band a tab sits in is a presentation choice that
+  // will change again. What must hold is that every tab is reachable and every one
+  // opens a section — asserting the order as well made regrouping the sidebar
+  // look like a broken navigation.
   const tabs = await page.locator('.nav-item').evaluateAll((els) => els.map((el) => el.dataset.tab));
-  expect(tabs).toEqual(['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about']);
+  expect([...tabs].sort()).toEqual(
+    ['dashboard', 'sessions', 'history', 'launchpad', 'analytics', 'coverage', 'activity', 'settings', 'about'].sort()
+  );
+  // Dashboard leads and About is last, which are the two positions that are not
+  // arbitrary: one is the landing tab, the other the footer.
+  expect(tabs[0]).toBe('dashboard');
+  expect(tabs[tabs.length - 1]).toBe('about');
 
   for (const tab of tabs) {
     await page.click(`.nav-item[data-tab="${tab}"]`);
@@ -818,19 +834,27 @@ test('installing hooks leaves a user’s unrelated hooks untouched', async () =>
 
 /* ============================== coverage =============================== */
 
-test('the coverage tab lists all ten failure classes with their outcomes', async () => {
+test('the coverage tab lists every failure class with its outcome', async () => {
   const sandbox = fx.makeSandbox('coverage');
   ctx = await fx.launch(sandbox);
   await ctx.page.click('.nav-item[data-tab="coverage"]');
 
+  // One card per class, counted from the shared list — see the note on the
+  // per-failure tuning test above for why this is not a literal.
+  const { ERROR_CLASSES } = require('../../src/shared/policy');
   const cards = ctx.page.locator('#coverageClasses .cov-card');
-  await expect(cards).toHaveCount(10);
+  await expect(cards).toHaveCount(ERROR_CLASSES.length);
 
   // The retry asymmetry is the design's core claim, so it must be visible.
   await expect(cards.filter({ hasText: 'Rate limited' })).toContainText('Auto-resume');
   await expect(cards.filter({ hasText: 'Context overflow' })).toContainText('Compact + resume');
   await expect(cards.filter({ hasText: 'Authentication failed' })).toContainText('Alert you');
   await expect(cards.filter({ hasText: 'Billing problem' })).toContainText('Alert you');
+  // The two classes that a 403 used to hide behind each other. Both alert rather
+  // than retry, but for opposite reasons — one is a permissions problem and one is
+  // a limit that clears — so both must be on the page in their own right.
+  await expect(cards.filter({ hasText: 'Usage limit reached' })).toContainText('Alert you');
+  await expect(cards.filter({ hasText: 'Access denied' })).toContainText('Alert you');
 
   // State is carried on the card, so "covered" is legible at a glance.
   await expect(cards.filter({ hasText: 'Rate limited' })).toHaveAttribute('data-on', 'true');
@@ -1288,7 +1312,7 @@ test('the about page reports live figures, not static copy', async () => {
   const { page } = ctx;
   await page.click('.nav-item[data-tab="about"]');
 
-  await expect(page.locator('#aboutMetrics .hero-metric')).toHaveCount(4);
+  await expect(page.locator('#aboutMetrics .hero-metric')).toHaveCount(5);
   await expect(page.locator('#aboutMetrics')).toContainText('checks enabled');
   await expect(page.locator('#aboutSteps .step')).toHaveCount(4);
   await expect(page.locator('#aboutRetryCards .split-card')).toHaveCount(2);
@@ -1303,6 +1327,13 @@ test('the about page reports live figures, not static copy', async () => {
   await expect(page.locator('.built-with')).toContainText('Claude Opus 5');
   await expect(page.locator('.built-with')).toContainText('Claude Code');
   await expect(page.locator('#aboutFoot')).toContainText('Not affiliated with Anthropic');
+
+  // What the app cost to write, stated to the precision the figure is kept at.
+  // Read from the shared module rather than written here, so bumping the total
+  // after a session is a one-line edit and not a two-file one.
+  const { BUILD_COST_USD } = require('../../src/shared/build-cost');
+  await expect(page.locator('#builtCost')).toContainText(`$${BUILD_COST_USD.toFixed(4)}`);
+  await expect(page.locator('#aboutMetrics')).toContainText('cost to build');
 });
 
 test('the about page names the version it is actually running', async () => {
