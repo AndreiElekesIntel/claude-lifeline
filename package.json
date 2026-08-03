@@ -22,6 +22,8 @@
     "lint": "node scripts/lint.mjs",
     "install-hook": "node scripts/cli.mjs install",
     "uninstall-hook": "node scripts/cli.mjs uninstall",
+    "statusline-on": "node scripts/cli.mjs statusline-on",
+    "statusline-off": "node scripts/cli.mjs statusline-off",
     "doctor": "node scripts/cli.mjs doctor",
     "pin": "node scripts/cli.mjs pin",
     "shutdown-check": "node scripts/idle-shutdown.mjs --check",

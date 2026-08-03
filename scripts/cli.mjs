@@ -11,6 +11,9 @@
  *   node scripts/cli.mjs pin         run recovery from a frozen copy, not this tree
  *   node scripts/cli.mjs doctor      check that everything is wired up
  *   node scripts/cli.mjs status      one-line summary
+ *
+ *   node scripts/cli.mjs statusline-on / statusline-off
+ *                                    show session state inside Claude Code itself
  */
 
 import { createRequire } from 'node:module';
@@ -125,6 +128,42 @@ function cmdUninstall() {
   return 0;
 }
 
+/**
+ * Put the live dot inside Claude Code itself.
+ *
+ * The Sessions table's dot only helps once you have switched to Lifeline's window,
+ * which is the thing you were trying to avoid doing. `statusLine` is the one place
+ * Lifeline can draw inside a session.
+ */
+function cmdStatuslineInstall() {
+  const res = installer.installStatusline();
+  console.log(ok('✓') + ' Lifeline statusline registered');
+  if (res.replaced) {
+    // Said loudly: replacing someone's statusline silently would be rude, and the
+    // reassurance that it is recoverable is the part that matters.
+    console.log(warn('•') + ` Your previous statusline was replaced: ${dim(String(res.replaced.command || ''))}`);
+    console.log(dim(`  Saved to ${res.stash} — \`statusline-off\` puts it back exactly as it was.`));
+  }
+  if (res.backup) console.log(dim(`  Settings backup: ${res.backup}`));
+  console.log('');
+  console.log('Each session now shows its own state at the start of the line, and how many');
+  console.log('other sessions are finished at the end.');
+  console.log(dim('Claude Code reads settings at startup, so restart a session to see it.'));
+  return 0;
+}
+
+function cmdStatuslineUninstall() {
+  const res = installer.uninstallStatusline();
+  if (!res.removed) {
+    console.log(warn('•') + ` ${res.detail}`);
+    return 0;
+  }
+  console.log(ok('✓') + ' Lifeline statusline removed');
+  if (res.restored) console.log(dim(`  Restored: ${String(res.restored.command || '')}`));
+  if (res.backup) console.log(dim(`  Settings backup: ${res.backup}`));
+  return 0;
+}
+
 /** The hook path settings.json actually contains, or null if none is registered. */
 function registeredHookPath() {
   try {
@@ -209,6 +248,12 @@ function cmdDoctor() {
     problems.push('Run `npm run install-hook` — without this, nothing is protected.');
   }
 
+  // 3b. The in-session dot. Optional, so its absence is information, not a problem.
+  const sl = installer.statuslineStatus();
+  if (sl.installed) line('ok', 'In-session dot active', 'statusline registered');
+  else if (sl.other) line('warn', 'Another statusline is configured', 'run `statusline-on` to show the dot in sessions');
+  else line('warn', 'No in-session dot', 'run `statusline-on` to show session state inside Claude Code');
+
   // 4. Master switch.
   const cfg = loadConfig();
   if (cfg.enabled) line('ok', 'Protection enabled');
@@ -279,17 +324,27 @@ function cmdStatus() {
   return cfg.enabled && st.complete ? 0 : 1;
 }
 
-const commands = { install: cmdInstall, uninstall: cmdUninstall, pin: cmdPin, doctor: cmdDoctor, status: cmdStatus };
+const commands = {
+  install: cmdInstall,
+  uninstall: cmdUninstall,
+  pin: cmdPin,
+  doctor: cmdDoctor,
+  status: cmdStatus,
+  'statusline-on': cmdStatuslineInstall,
+  'statusline-off': cmdStatuslineUninstall,
+};
 const cmd = process.argv[2];
 
 if (!cmd || cmd === '--help' || cmd === '-h') {
   console.log(`Claude Lifeline
 
-  install     register the recovery hooks with Claude Code
-  uninstall   remove them
-  pin         snapshot the recovery code and run hooks from that copy
-  doctor      verify every link in the recovery chain
-  status      one-line summary`);
+  install         register the recovery hooks with Claude Code
+  uninstall       remove them
+  pin             snapshot the recovery code and run hooks from that copy
+  statusline-on   show session state as a dot inside Claude Code itself
+  statusline-off  restore whatever statusline you had before
+  doctor          verify every link in the recovery chain
+  status          one-line summary`);
   process.exit(0);
 }
 

@@ -156,3 +156,123 @@ test('the StopFailure hook gets a long timeout for backoff waits', () => {
   const hook = readSettings().hooks.StopFailure[0].hooks[0];
   assert.ok(hook.timeout >= 600, 'a rate-limit backoff can exceed the default hook timeout');
 });
+
+/* ------------------------------------------------------- statusline ---------- */
+/**
+ * The statusline is a single slot, not a list, so installing it *replaces* whatever
+ * the user had. These tests are about that being reversible: the original command is
+ * stashed on the way in and restored byte-for-byte on the way out.
+ */
+
+test('installing the statusline over an existing one stashes the original', () => {
+  scratchEnv();
+  const mine = { type: 'command', command: 'node "C:\Users\me\.claude\statusline.js"', padding: 0 };
+  fs.writeFileSync(settingsPath(), JSON.stringify({ statusLine: mine }, null, 2), 'utf8');
+
+  const installer = loadInstaller();
+  const res = installer.installStatusline();
+  assert.deepEqual(res.replaced, mine, 'the caller must be able to report what it displaced');
+
+  const s = readSettings();
+  assert.match(s.statusLine.command, /statusline/, 'ours should now be configured');
+  assert.notEqual(s.statusLine.command, mine.command);
+
+  const stashed = JSON.parse(fs.readFileSync(res.stash, 'utf8'));
+  assert.deepEqual(stashed, mine, 'the original must be recoverable in full, not just its command');
+});
+
+test('uninstall restores the previous statusline exactly', () => {
+  scratchEnv();
+  const mine = { type: 'command', command: 'pwsh -c prompt.ps1', padding: 2, extraKeyWeDoNotKnow: true };
+  fs.writeFileSync(settingsPath(), JSON.stringify({ statusLine: mine, model: 'keep' }, null, 2), 'utf8');
+
+  const installer = loadInstaller();
+  installer.installStatusline();
+  const res = installer.uninstallStatusline();
+
+  assert.equal(res.removed, true);
+  const s = readSettings();
+  assert.deepEqual(s.statusLine, mine, 'unknown keys must survive the round trip too');
+  assert.equal(s.model, 'keep');
+});
+
+test('installing twice does not overwrite the stash with ourselves', () => {
+  // The failure this guards: second install stashes Lifeline, and uninstall then
+  // "restores" Lifeline, so the user's own statusline is gone for good.
+  scratchEnv();
+  const mine = { type: 'command', command: 'node my-statusline.js' };
+  fs.writeFileSync(settingsPath(), JSON.stringify({ statusLine: mine }, null, 2), 'utf8');
+
+  const installer = loadInstaller();
+  installer.installStatusline();
+  const second = installer.installStatusline();
+  assert.equal(second.replaced, null, 're-installing displaces nothing new');
+
+  installer.uninstallStatusline();
+  assert.deepEqual(readSettings().statusLine, mine);
+});
+
+test('with no statusline before us, uninstall leaves none behind', () => {
+  scratchEnv();
+  const installer = loadInstaller();
+  installer.installStatusline();
+  installer.uninstallStatusline();
+  const s = readSettings();
+  assert.ok(!('statusLine' in s), 'an empty statusLine key would be a husk Claude Code still reads');
+});
+
+test('uninstall leaves a foreign statusline alone', () => {
+  scratchEnv();
+  const mine = { type: 'command', command: 'node my-statusline.js' };
+  fs.writeFileSync(settingsPath(), JSON.stringify({ statusLine: mine }, null, 2), 'utf8');
+
+  const res = loadInstaller().uninstallStatusline();
+  assert.equal(res.removed, false, 'removing a statusline we never installed would be destructive');
+  assert.deepEqual(readSettings().statusLine, mine);
+});
+
+test('the statusline install preserves hooks, and hook install preserves the statusline', () => {
+  scratchEnv();
+  const installer = loadInstaller();
+  installer.install();
+  installer.installStatusline();
+
+  let s = readSettings();
+  assert.ok(s.hooks.StopFailure, 'the statusline install must not touch hooks');
+  assert.ok(s.statusLine);
+
+  installer.install();
+  s = readSettings();
+  assert.match(s.statusLine.command, /statusline/, 'the hook install must not touch the statusline');
+});
+
+test('statuslineStatus distinguishes ours, a foreign one, and none', () => {
+  scratchEnv();
+  const installer = loadInstaller();
+  assert.equal(installer.statuslineStatus().installed, false);
+
+  fs.writeFileSync(settingsPath(), JSON.stringify({ statusLine: { type: 'command', command: 'node other.js' } }), 'utf8');
+  const foreign = installer.statuslineStatus();
+  assert.equal(foreign.installed, false);
+  assert.equal(foreign.other, true);
+
+  installer.installStatusline();
+  const ours = installer.statuslineStatus();
+  assert.equal(ours.installed, true);
+  assert.equal(ours.other, false);
+  assert.ok(ours.stashed, 'the displaced one should be reported as recoverable');
+});
+
+test('the statusline command quotes its path for spaces', () => {
+  scratchEnv();
+  loadInstaller().installStatusline();
+  assert.match(readSettings().statusLine.command, /^node "/, 'the OneDrive path contains spaces');
+});
+
+test('a settings backup is taken before the statusline is replaced', () => {
+  scratchEnv();
+  fs.writeFileSync(settingsPath(), JSON.stringify({ statusLine: { command: 'node mine.js' } }), 'utf8');
+  const res = loadInstaller().installStatusline();
+  assert.ok(res.backup && fs.existsSync(res.backup), 'settings.json must be recoverable independently of the stash');
+  assert.match(fs.readFileSync(res.backup, 'utf8'), /mine\.js/);
+});

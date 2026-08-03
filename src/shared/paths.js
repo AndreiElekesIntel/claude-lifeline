@@ -77,6 +77,9 @@ const claudeStatsFile = () => path.join(claudeHome(), 'stats-cache.json');
  */
 const hookEntry = () => path.resolve(__dirname, '..', 'hook', 'lifeline-hook.js');
 
+/** Absolute path to the statusline command, for the same reason as `hookEntry`. */
+const statuslineEntry = () => path.resolve(__dirname, '..', 'statusline', 'cli.js');
+
 module.exports = {
   lifelineHome,
   claudeHome,
@@ -91,4 +94,5 @@ module.exports = {
   projectsDir,
   claudeStatsFile,
   hookEntry,
+  statuslineEntry,
 };

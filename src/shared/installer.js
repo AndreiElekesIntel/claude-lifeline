@@ -11,7 +11,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { claudeSettingsFile, claudeHome, hookEntry, lifelineHome } = require('./paths');
+const { claudeSettingsFile, claudeHome, hookEntry, statuslineEntry, lifelineHome } = require('./paths');
 
 /** Marker that identifies a Lifeline-owned hook entry. */
 const MARKER = 'claude-lifeline';
@@ -182,4 +182,123 @@ function status() {
   };
 }
 
-module.exports = { install, uninstall, status, hookSpecs, backupSettings, MARKER };
+/* ------------------------------------------------------------------ statusline */
+
+/**
+ * The statusline is a *slot*, not a list — and that changes the rules.
+ *
+ * Hooks merge: ours is appended alongside whatever was there. `statusLine` holds
+ * one command, so installing means replacing the user's. Two ways to avoid losing
+ * it, and the choice matters:
+ *
+ *   - Chain it: run the previous command and wrap its output. General, but it puts
+ *     a second Node startup on a path Claude Code blocks on for every refresh, and
+ *     Node startup is already the whole cost (~200ms).
+ *   - Replace it and remember it. Lifeline's statusline reproduces the same fields
+ *     the stock one does, so nothing is lost on screen, and uninstall can put the
+ *     original back byte-for-byte.
+ *
+ * The second, on the reasoning that the statusline is worth exactly one process.
+ *
+ * The previous command is stashed in Lifeline's own directory rather than as an
+ * extra key inside settings.json: `statusLine` is a schema Claude Code validates,
+ * and an unrecognised field there is a risk taken for no benefit when we have a
+ * data folder of our own.
+ */
+const statuslineStashFile = () => path.join(lifelineHome(), 'statusline-previous.json');
+
+/** Ours, by explicit marker or by the path it runs — never a user's own script. */
+function isOurStatusline(sl) {
+  if (!sl || typeof sl !== 'object') return false;
+  if (sl._source === MARKER) return true;
+  const cmd = String(sl.command || '').replace(/\\/g, '/').toLowerCase();
+  return cmd.includes('lifeline') && cmd.includes('statusline');
+}
+
+function statuslineSpec({ entry: entryOverride } = {}) {
+  const entry = entryOverride || statuslineEntry();
+  return { type: 'command', command: `node "${entry}"`, padding: 0, _source: MARKER };
+}
+
+function installStatusline({ entry } = {}) {
+  const backup = backupSettings();
+  const settings = readSettings();
+
+  const existing = settings.statusLine;
+  let replaced = null;
+  if (existing && !isOurStatusline(existing)) {
+    // Only stash a genuinely foreign statusline. Re-installing over our own must
+    // not overwrite the stash with ourselves, or uninstall would restore Lifeline.
+    replaced = existing;
+    fs.mkdirSync(lifelineHome(), { recursive: true });
+    fs.writeFileSync(statuslineStashFile(), JSON.stringify(existing, null, 2), 'utf8');
+  }
+
+  settings.statusLine = statuslineSpec({ entry });
+  writeSettings(settings);
+  return { ok: true, backup, replaced, settingsFile: claudeSettingsFile(), stash: replaced ? statuslineStashFile() : null };
+}
+
+function uninstallStatusline() {
+  const file = claudeSettingsFile();
+  if (!fs.existsSync(file)) return { ok: true, removed: false, detail: 'No settings.json found.' };
+
+  const settings = readSettings();
+  if (!isOurStatusline(settings.statusLine)) {
+    return { ok: true, removed: false, detail: 'Lifeline is not the configured statusline.' };
+  }
+
+  const backup = backupSettings();
+
+  let restored = null;
+  try {
+    restored = JSON.parse(fs.readFileSync(statuslineStashFile(), 'utf8'));
+  } catch {
+    /* nothing was stashed: there was no statusline before us, so leave none behind */
+  }
+
+  if (restored) settings.statusLine = restored;
+  else delete settings.statusLine;
+
+  writeSettings(settings);
+  // Only now that the restore has landed, so a failed write can be retried.
+  if (restored) fs.rmSync(statuslineStashFile(), { force: true });
+
+  return { ok: true, backup, removed: true, restored, settingsFile: file };
+}
+
+function statuslineStatus() {
+  let settings;
+  try {
+    settings = readSettings();
+  } catch (err) {
+    return { installed: false, error: err.message };
+  }
+  const sl = (settings && settings.statusLine) || null;
+  let stashed = null;
+  try {
+    stashed = JSON.parse(fs.readFileSync(statuslineStashFile(), 'utf8'));
+  } catch {
+    /* no stash is the normal case */
+  }
+  return {
+    installed: isOurStatusline(sl),
+    command: sl ? String(sl.command || '') : null,
+    other: !!sl && !isOurStatusline(sl),
+    stashed,
+    settingsFile: claudeSettingsFile(),
+  };
+}
+
+module.exports = {
+  install,
+  uninstall,
+  status,
+  hookSpecs,
+  backupSettings,
+  MARKER,
+  installStatusline,
+  uninstallStatusline,
+  statuslineStatus,
+  statuslineSpec,
+};
