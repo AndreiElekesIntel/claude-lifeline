@@ -54,6 +54,18 @@ const completionSignalFile = () => path.join(lifelineHome(), 'last-completion.js
 /** Claude Code's user settings — where the StopFailure hook gets installed. */
 const claudeSettingsFile = () => path.join(claudeHome(), 'settings.json');
 
+/**
+ * Claude Code's top-level config, which holds the per-project record of the
+ * workspace trust dialog as `projects["<dir>"].hasTrustDialogAccepted`.
+ *
+ * Note it is a *sibling* of the config directory rather than a file inside it: the
+ * CLI writes `~/.claude.json` next to `~/.claude/`. When CLAUDE_CONFIG_DIR is set
+ * the whole config moves, so it is resolved from claudeHome() in that case — which
+ * is also what lets the tests point it at a scratch file.
+ */
+const claudeConfigFile = () =>
+  process.env.CLAUDE_CONFIG_DIR ? path.join(claudeHome(), '.claude.json') : path.join(os.homedir(), '.claude.json');
+
 /** One JSON file per live CLI process, written by Claude Code itself. */
 const sessionsDir = () => path.join(claudeHome(), 'sessions');
 
@@ -90,6 +102,7 @@ module.exports = {
   analyticsCacheFile,
   completionSignalFile,
   claudeSettingsFile,
+  claudeConfigFile,
   sessionsDir,
   projectsDir,
   claudeStatsFile,

@@ -396,3 +396,110 @@ test('removing a shortcut targets the same filename that writing one produced', 
   assert.equal(launchpad.removeDesktopShortcut({ label }, { desktopDir }).missing, undefined);
   assert.equal(fs.existsSync(lnk), false);
 });
+
+/* ============================ removeLaunchFiles ============================ */
+
+test('deleting a preset takes its launch pair with it, so no stray icon still works', () => {
+  const launchDir = tmpdir('launchfiles');
+  const preset = { id: 'abc123', label: 'Ship it', cwd: process.cwd() };
+  launcher.writeLaunchFiles(preset, { dir: launchDir, stamp: `preset-${preset.id}` });
+  fs.writeFileSync(path.join(launchDir, `shortcut-${preset.id}.ps1`), 'x', 'utf8');
+  // A second preset's files must survive: the removal is keyed by id, and deleting
+  // one button has never been a reason for another to stop working.
+  launcher.writeLaunchFiles({ label: 'Other' }, { dir: launchDir, stamp: 'preset-zzz999' });
+
+  const res = launchpad.removeLaunchFiles(preset.id, { launchDir });
+  assert.equal(res.ok, true);
+  assert.equal(res.removed.length, 3);
+
+  const left = fs.readdirSync(launchDir);
+  assert.equal(
+    left.some((f) => f.includes(preset.id)),
+    false
+  );
+  assert.equal(
+    left.some((f) => f.includes('zzz999')),
+    true
+  );
+});
+
+test('removing launch files is silent when they are already gone, and refuses a bad id', () => {
+  const launchDir = tmpdir('launchfiles-missing');
+  // A delete must not fail because the shell already cleaned TEMP.
+  assert.equal(launchpad.removeLaunchFiles('abc123', { launchDir }).ok, true);
+  assert.equal(launchpad.removeLaunchFiles('abc123', { launchDir }).removed.length, 0);
+  // An id that could not have been issued names no file, so it is refused rather
+  // than turned into a path.
+  assert.equal(launchpad.removeLaunchFiles('../../etc', { launchDir }).ok, false);
+  assert.equal(launchpad.removeLaunchFiles('', { launchDir }).ok, false);
+});
+
+/* ============================== ensureTrusted ============================== */
+
+test('a preset directory is recorded as trusted, in the key shape Claude Code uses', () => {
+  const dir = tmpdir('trust');
+  const file = path.join(dir, '.claude.json');
+  fs.writeFileSync(file, JSON.stringify({ projects: {} }), 'utf8');
+
+  const res = launchpad.ensureTrusted(process.cwd(), { file });
+  assert.equal(res.ok, true);
+  assert.equal(res.changed, true);
+
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const key = launchpad.projectKey(process.cwd());
+  // Forward slashes even on Windows: a backslash key is not an error anyone sees,
+  // it is simply an entry the CLI never reads, and the dialog keeps appearing.
+  assert.equal(key.includes(String.fromCharCode(92)), false);
+  assert.equal(written.projects[key].hasTrustDialogAccepted, true);
+});
+
+test('trusting twice does not rewrite a file another process may be holding', () => {
+  const dir = tmpdir('trust-idempotent');
+  const file = path.join(dir, '.claude.json');
+  fs.writeFileSync(file, JSON.stringify({ projects: {} }), 'utf8');
+
+  launchpad.ensureTrusted(process.cwd(), { file });
+  const stamp = fs.statSync(file).mtimeMs;
+  const again = launchpad.ensureTrusted(process.cwd(), { file });
+
+  assert.equal(again.ok, true);
+  assert.equal(again.changed, false);
+  assert.equal(fs.statSync(file).mtimeMs, stamp);
+});
+
+test('trust leaves every other key in Claude Code’s config untouched', () => {
+  const dir = tmpdir('trust-preserve');
+  const file = path.join(dir, '.claude.json');
+  const original = {
+    numStartups: 41,
+    projects: { 'C:/elsewhere': { hasTrustDialogAccepted: false, history: ['keep me'] } },
+    oauthAccount: { emailAddress: 'someone@example.com' },
+  };
+  fs.writeFileSync(file, JSON.stringify(original), 'utf8');
+
+  launchpad.ensureTrusted(process.cwd(), { file });
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+  assert.equal(written.numStartups, 41);
+  assert.deepEqual(written.oauthAccount, original.oauthAccount);
+  // Another project's decision is that project's, including a deliberate `false`.
+  assert.equal(written.projects['C:/elsewhere'].hasTrustDialogAccepted, false);
+  assert.deepEqual(written.projects['C:/elsewhere'].history, ['keep me']);
+});
+
+test('trust never throws, and never invents a config Claude Code has not written', () => {
+  const dir = tmpdir('trust-absent');
+  const missing = path.join(dir, '.claude.json');
+
+  const res = launchpad.ensureTrusted(process.cwd(), { file: missing });
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /Could not read/);
+  // The point: no file appears. Writing one would be Lifeline deciding the shape of
+  // another tool's state.
+  assert.equal(fs.existsSync(missing), false);
+
+  fs.writeFileSync(missing, 'not json at all', 'utf8');
+  assert.equal(launchpad.ensureTrusted(process.cwd(), { file: missing }).ok, false);
+  assert.equal(launchpad.ensureTrusted(null, { file: missing }).ok, false);
+  assert.equal(launchpad.ensureTrusted(process.cwd(), {}).ok, false);
+});

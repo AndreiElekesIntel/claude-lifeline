@@ -46,7 +46,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const { PERMISSION_MODES, SKILL_RE } = require('./launcher');
+const { PERMISSION_MODES, SKILL_RE, LAUNCH_PREFIX } = require('./launcher');
 
 /** Longest label accepted. It has to fit under a desktop icon and in a button. */
 const MAX_LABEL = 60;
@@ -256,7 +256,7 @@ function shortcutFileName(label) {
  * into Lifeline's own data directory, keyed by preset id, and rewritten whenever
  * the preset changes.
  */
-function writeDesktopShortcut(preset, { desktopDir, launchDir, launcher, iconPath = null, powershell = 'powershell' } = {}) {
+function writeDesktopShortcut(preset, { desktopDir, launchDir, launcher, iconPath = null, powershell = 'powershell', node = undefined } = {}) {
   const res = normalisePreset(preset, { now: 0, seed: 0 });
   if (!res.ok) return res;
   const p = res.preset;
@@ -270,7 +270,12 @@ function writeDesktopShortcut(preset, { desktopDir, launchDir, launcher, iconPat
     // Keyed by id, not by timestamp: a shortcut is long-lived, so editing the
     // preset must update the file the existing icon already points at rather than
     // leaving it running the old configuration.
-    ({ script } = launcher.writeLaunchFiles(p, { dir: launchDir, stamp: `preset-${p.id}` }));
+    // `node` is threaded through rather than left to default. Its default is
+    // `process.execPath`, which in the app is Electron — and a batch file that runs
+    // the session through Electron hands Claude Code a non-console stdout, so the
+    // shortcut opens a window that prints once and exits instead of a session. See
+    // launcherNode() in main.js for the measurement.
+    ({ script } = launcher.writeLaunchFiles(p, { dir: launchDir, stamp: `preset-${p.id}`, ...(node ? { node } : {}) }));
   } catch (err) {
     return { ok: false, reason: `Could not write the launch script: ${err.message}` };
   }
@@ -337,6 +342,100 @@ function describe(preset) {
   return `Claude Code: ${preset.label}${tail}`.slice(0, 250);
 }
 
+/**
+ * Delete the launch pair a preset owns, so nothing is left to run after it is gone.
+ *
+ * Without this, deleting a preset leaves `preset-<id>.cmd` and its spec behind, and
+ * any desktop icon still pointing at them keeps starting a session the user believes
+ * they removed. The files are keyed by id, so this cannot touch another preset's.
+ *
+ * Best-effort by design: a file that is already gone, or locked by the shell that is
+ * reading it at this instant, is not a reason to fail a delete the user asked for.
+ */
+function removeLaunchFiles(id, { launchDir } = {}) {
+  const clean = String(id || '');
+  if (!launchDir || !ID_RE.test(clean)) return { ok: false, reason: 'Nothing to remove.' };
+
+  const removed = [];
+  for (const name of [`${LAUNCH_PREFIX}-preset-${clean}.cmd`, `${LAUNCH_PREFIX}-preset-${clean}.json`, `shortcut-${clean}.ps1`]) {
+    const file = path.join(launchDir, name);
+    try {
+      fs.unlinkSync(file);
+      removed.push(file);
+    } catch {
+      /* already gone, or in use — neither should fail the delete */
+    }
+  }
+  return { ok: true, removed };
+}
+
+/* ============================ workspace trust ============================ */
+
+/**
+ * The key Claude Code files a project under in its own config.
+ *
+ * Absolute, forward slashes, no trailing separator — checked against a real
+ * `~/.claude.json`, where every entry is written that way even on Windows. A key in
+ * the wrong shape is not an error anyone sees; it is simply a second entry that the
+ * CLI never reads, and the dialog keeps appearing.
+ */
+function projectKey(dir) {
+  return path.resolve(String(dir)).split(path.sep).join('/').replace(/\/+$/, '');
+}
+
+/**
+ * Record that a preset's working directory is trusted, so a launched session does
+ * not stop on "Do you trust the files in this folder?".
+ *
+ * This is the third member of a family the launcher already handles twice. A preset
+ * exists to start a session from a button, often unattended; `--dangerously-skip-
+ * permissions` and `--strict-mcp-config` are both there because a session that opens
+ * and then waits on a dialog is a session that did not start, and the failure is
+ * invisible until someone goes looking at the window. The trust dialog is the same
+ * blocker arriving through a different door.
+ *
+ * Three deliberate limits, because this writes to a file Lifeline does not own:
+ *
+ *   - **It never creates the file.** If Claude Code has not written its config yet,
+ *     inventing one would be Lifeline deciding the shape of another tool's state.
+ *   - **It writes only when the flag is not already true**, so a launch that changes
+ *     nothing does not touch the file at all — which matters, because a running
+ *     session may rewrite it at any moment.
+ *   - **It never throws.** Every failure returns a reason the caller is free to
+ *     ignore. Not being able to pre-trust a directory is a dialog, not a broken
+ *     launch, and the launch must still happen.
+ */
+function ensureTrusted(dir, { file } = {}) {
+  if (!dir || !file) return { ok: false, reason: 'No directory or config file given.' };
+
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    // ENOENT is the ordinary case on a machine where the CLI has not run yet.
+    return { ok: false, reason: `Could not read ${path.basename(file)}: ${err.message}` };
+  }
+  if (!data || typeof data !== 'object') return { ok: false, reason: 'That config is not an object.' };
+
+  const key = projectKey(dir);
+  const projects = data.projects && typeof data.projects === 'object' ? data.projects : (data.projects = {});
+  const entry = projects[key] && typeof projects[key] === 'object' ? projects[key] : (projects[key] = {});
+  if (entry.hasTrustDialogAccepted === true) return { ok: true, changed: false, key };
+
+  entry.hasTrustDialogAccepted = true;
+
+  try {
+    // Written beside the target and renamed: a session reading this file while the
+    // write is in flight must never see half of it.
+    const tmp = `${file}.lifeline-tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    return { ok: false, reason: `Could not record trust for ${key}: ${err.message}` };
+  }
+  return { ok: true, changed: true, key };
+}
+
 /** Delete a shortcut previously written for this label. */
 function removeDesktopShortcut(preset, { desktopDir } = {}) {
   if (!desktopDir) return { ok: false, reason: 'Could not find your Desktop folder.' };
@@ -367,4 +466,7 @@ module.exports = {
   describe,
   writeDesktopShortcut,
   removeDesktopShortcut,
+  removeLaunchFiles,
+  projectKey,
+  ensureTrusted,
 };

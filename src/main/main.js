@@ -63,6 +63,17 @@ const noSpawn = process.env.LIFELINE_NO_SPAWN === '1';
  * have run. Same return shape either way, so no caller needs to know which.
  */
 function launchSession(preset, opts = {}) {
+  /**
+   * Pre-accept the workspace trust dialog for this preset's directory.
+   *
+   * Same reason as the two flags in claudeArgs(): a preset is a button, and a button
+   * that opens a window which then waits on a dialog has not started a session. The
+   * result is deliberately ignored — failing to pre-trust costs one prompt, while
+   * refusing to launch costs the session.
+   */
+  if (preset && preset.cwd) {
+    launchpad.ensureTrusted(preset.cwd, { file: paths.claudeConfigFile() });
+  }
   if (!noSpawn) return launcher.launch(preset, { node: launcherNode(), ...opts });
   const { spec, script } = launcher.writeLaunchFiles(preset, { node: launcherNode(), ...opts });
   const cmd = launcher.resolveCommand(script);
@@ -980,11 +991,47 @@ function presetLaunchDir() {
 /**
  * Which Node binary the generated batch file should run.
  *
- * In a packaged build there is no `node.exe` to rely on, so Electron's own
- * executable is used with ELECTRON_RUN_AS_NODE — which the batch file sets.
+ * A real `node.exe` is preferred, and the reason is the whole difference between a
+ * session and a printout. **Electron's binary is a GUI-subsystem executable: it has
+ * no console.** Under ELECTRON_RUN_AS_NODE it runs the runner correctly, but the
+ * child it spawns with `stdio: 'inherit'` inherits handles that are not a console,
+ * so Claude Code takes its documented "stdout is not a TTY" path and switches to
+ * `--print` — answering once and exiting, or, for a preset with no pre-prompt,
+ * failing outright with "Input must be provided either through stdin or as a prompt
+ * argument". A Launchpad button that silently produces a transcript instead of a
+ * session is the worst version of this bug, because nothing reports it.
+ *
+ * Measured, in one console, varying only the interpreter:
+ *
+ *   node.exe               -> stdin=true  stdout=true   (interactive)
+ *   Claude Lifeline.exe    -> stdin=false stdout=false  (--print)
+ *
+ * Depending on Node is not a new requirement: the StopFailure hook is installed into
+ * Claude Code's settings as `node "<hook>"`, so a machine without Node on PATH has
+ * no recovery either. Electron remains the fallback, since a launch that degrades to
+ * `--print` is still better than one that cannot start.
  */
 function launcherNode() {
-  return process.execPath;
+  return nodeOnPath() || process.execPath;
+}
+
+/**
+ * The first real `node.exe` on PATH, or null.
+ *
+ * Resolved by hand rather than with a shell, for the same reason launch-runner.js
+ * does it: asking `where` would mean spawning a shell on a hot path, and the answer
+ * has to be an executable CreateProcess can run, not a `.cmd` shim.
+ */
+function nodeOnPath() {
+  for (const dir of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, 'node.exe');
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* try the next entry */
+    }
+  }
+  return null;
 }
 
 /**
@@ -1160,14 +1207,49 @@ ipcMain.handle('launch-preset', (_e, id) => {
 /** Create or update a preset. Validation lives in launchpad.js, not here. */
 ipcMain.handle('save-preset', (_e, input) => {
   const cfg = loadConfig();
+  // Captured before the upsert, because a rename is only detectable against the
+  // label the desktop icon was actually named after.
+  const before = launchpad.findPreset(cfg, input && input.id);
   const res = launchpad.upsertPreset(cfg, input);
   if (!res.ok) return { ok: false, reason: res.reason };
   cfg.launchpad = { ...(cfg.launchpad || {}), presets: res.presets };
   saveConfig(cfg);
   registerPresetShortcuts();
+  followRename(before, res.preset);
   if (win) win.webContents.send('config-changed', cfg);
   return { ok: true, preset: res.preset };
 });
+
+/**
+ * Move a preset's desktop icon when the preset is renamed.
+ *
+ * A shortcut's filename comes from the label, so a rename otherwise strands the old
+ * icon: it keeps the old name, keeps working — it points at `preset-<id>.cmd`, which
+ * is still there — and then survives the delete, because removeDesktopShortcut looks
+ * for the *current* label and finds nothing. The user is left with an icon whose name
+ * describes neither what it does nor a preset that exists.
+ *
+ * Only an icon that is really there is moved. Writing one here for a preset the user
+ * never put on the desktop would be inventing a shortcut out of a rename.
+ */
+function followRename(before, after) {
+  if (!before || !after || before.label === after.label) return;
+  const dir = desktopDir();
+  if (!dir) return;
+  try {
+    if (!fs.existsSync(path.join(dir, launchpad.shortcutFileName(before.label)))) return;
+  } catch {
+    return;
+  }
+  launchpad.removeDesktopShortcut(before, { desktopDir: dir });
+  launchpad.writeDesktopShortcut(after, {
+    desktopDir: dir,
+    launchDir: presetLaunchDir(),
+    launcher,
+    iconPath: shortcutIconPath(),
+    node: launcherNode(),
+  });
+}
 
 ipcMain.handle('delete-preset', (_e, id) => {
   const cfg = loadConfig();
@@ -1178,6 +1260,9 @@ ipcMain.handle('delete-preset', (_e, id) => {
   // A desktop icon left pointing at a deleted preset would fail on click, so it
   // goes too. Best-effort: the preset is gone either way.
   if (gone) launchpad.removeDesktopShortcut(gone, { desktopDir: desktopDir() });
+  // And the launch pair with it. Left behind, it is what makes a stray icon keep
+  // *working* rather than failing — a deleted preset that still starts sessions.
+  launchpad.removeLaunchFiles(id, { launchDir: presetLaunchDir() });
   if (win) win.webContents.send('config-changed', cfg);
   return { ok: true };
 });
@@ -1262,6 +1347,8 @@ ipcMain.handle('preset-to-desktop', (_e, id) => {
     launchDir: presetLaunchDir(),
     launcher,
     iconPath: shortcutIconPath(),
+    // Same reason as every other launch: Electron cannot give the session a console.
+    node: launcherNode(),
   });
   return res.ok ? { ok: true, lnk: res.lnk } : { ok: false, reason: res.reason };
 });
@@ -1308,7 +1395,9 @@ function registerPresetShortcuts() {
     try {
       ok = globalShortcut.register(preset.accelerator, () => {
         try {
-          launcher.launch(preset, { node: launcherNode() });
+          // launchSession, not launcher.launch: a hotkey has to pre-accept the trust
+          // dialog exactly like the button does, or the two routes disagree.
+          launchSession(preset);
         } catch {
           /* the window it would have opened is the error report */
         }
