@@ -980,11 +980,47 @@ function presetLaunchDir() {
 /**
  * Which Node binary the generated batch file should run.
  *
- * In a packaged build there is no `node.exe` to rely on, so Electron's own
- * executable is used with ELECTRON_RUN_AS_NODE — which the batch file sets.
+ * A real `node.exe` is preferred, and the reason is the whole difference between a
+ * session and a printout. **Electron's binary is a GUI-subsystem executable: it has
+ * no console.** Under ELECTRON_RUN_AS_NODE it runs the runner correctly, but the
+ * child it spawns with `stdio: 'inherit'` inherits handles that are not a console,
+ * so Claude Code takes its documented "stdout is not a TTY" path and switches to
+ * `--print` — answering once and exiting, or, for a preset with no pre-prompt,
+ * failing outright with "Input must be provided either through stdin or as a prompt
+ * argument". A Launchpad button that silently produces a transcript instead of a
+ * session is the worst version of this bug, because nothing reports it.
+ *
+ * Measured, in one console, varying only the interpreter:
+ *
+ *   node.exe               -> stdin=true  stdout=true   (interactive)
+ *   Claude Lifeline.exe    -> stdin=false stdout=false  (--print)
+ *
+ * Depending on Node is not a new requirement: the StopFailure hook is installed into
+ * Claude Code's settings as `node "<hook>"`, so a machine without Node on PATH has
+ * no recovery either. Electron remains the fallback, since a launch that degrades to
+ * `--print` is still better than one that cannot start.
  */
 function launcherNode() {
-  return process.execPath;
+  return nodeOnPath() || process.execPath;
+}
+
+/**
+ * The first real `node.exe` on PATH, or null.
+ *
+ * Resolved by hand rather than with a shell, for the same reason launch-runner.js
+ * does it: asking `where` would mean spawning a shell on a hot path, and the answer
+ * has to be an executable CreateProcess can run, not a `.cmd` shim.
+ */
+function nodeOnPath() {
+  for (const dir of String(process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, 'node.exe');
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* try the next entry */
+    }
+  }
+  return null;
 }
 
 /**
@@ -1262,6 +1298,8 @@ ipcMain.handle('preset-to-desktop', (_e, id) => {
     launchDir: presetLaunchDir(),
     launcher,
     iconPath: shortcutIconPath(),
+    // Same reason as every other launch: Electron cannot give the session a console.
+    node: launcherNode(),
   });
   return res.ok ? { ok: true, lnk: res.lnk } : { ok: false, reason: res.reason };
 });

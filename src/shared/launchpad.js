@@ -256,7 +256,7 @@ function shortcutFileName(label) {
  * into Lifeline's own data directory, keyed by preset id, and rewritten whenever
  * the preset changes.
  */
-function writeDesktopShortcut(preset, { desktopDir, launchDir, launcher, iconPath = null, powershell = 'powershell' } = {}) {
+function writeDesktopShortcut(preset, { desktopDir, launchDir, launcher, iconPath = null, powershell = 'powershell', node = undefined } = {}) {
   const res = normalisePreset(preset, { now: 0, seed: 0 });
   if (!res.ok) return res;
   const p = res.preset;
@@ -270,7 +270,12 @@ function writeDesktopShortcut(preset, { desktopDir, launchDir, launcher, iconPat
     // Keyed by id, not by timestamp: a shortcut is long-lived, so editing the
     // preset must update the file the existing icon already points at rather than
     // leaving it running the old configuration.
-    ({ script } = launcher.writeLaunchFiles(p, { dir: launchDir, stamp: `preset-${p.id}` }));
+    // `node` is threaded through rather than left to default. Its default is
+    // `process.execPath`, which in the app is Electron — and a batch file that runs
+    // the session through Electron hands Claude Code a non-console stdout, so the
+    // shortcut opens a window that prints once and exits instead of a session. See
+    // launcherNode() in main.js for the measurement.
+    ({ script } = launcher.writeLaunchFiles(p, { dir: launchDir, stamp: `preset-${p.id}`, ...(node ? { node } : {}) }));
   } catch (err) {
     return { ok: false, reason: `Could not write the launch script: ${err.message}` };
   }
