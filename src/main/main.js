@@ -63,6 +63,17 @@ const noSpawn = process.env.LIFELINE_NO_SPAWN === '1';
  * have run. Same return shape either way, so no caller needs to know which.
  */
 function launchSession(preset, opts = {}) {
+  /**
+   * Pre-accept the workspace trust dialog for this preset's directory.
+   *
+   * Same reason as the two flags in claudeArgs(): a preset is a button, and a button
+   * that opens a window which then waits on a dialog has not started a session. The
+   * result is deliberately ignored — failing to pre-trust costs one prompt, while
+   * refusing to launch costs the session.
+   */
+  if (preset && preset.cwd) {
+    launchpad.ensureTrusted(preset.cwd, { file: paths.claudeConfigFile() });
+  }
   if (!noSpawn) return launcher.launch(preset, { node: launcherNode(), ...opts });
   const { spec, script } = launcher.writeLaunchFiles(preset, { node: launcherNode(), ...opts });
   const cmd = launcher.resolveCommand(script);
@@ -1196,14 +1207,49 @@ ipcMain.handle('launch-preset', (_e, id) => {
 /** Create or update a preset. Validation lives in launchpad.js, not here. */
 ipcMain.handle('save-preset', (_e, input) => {
   const cfg = loadConfig();
+  // Captured before the upsert, because a rename is only detectable against the
+  // label the desktop icon was actually named after.
+  const before = launchpad.findPreset(cfg, input && input.id);
   const res = launchpad.upsertPreset(cfg, input);
   if (!res.ok) return { ok: false, reason: res.reason };
   cfg.launchpad = { ...(cfg.launchpad || {}), presets: res.presets };
   saveConfig(cfg);
   registerPresetShortcuts();
+  followRename(before, res.preset);
   if (win) win.webContents.send('config-changed', cfg);
   return { ok: true, preset: res.preset };
 });
+
+/**
+ * Move a preset's desktop icon when the preset is renamed.
+ *
+ * A shortcut's filename comes from the label, so a rename otherwise strands the old
+ * icon: it keeps the old name, keeps working — it points at `preset-<id>.cmd`, which
+ * is still there — and then survives the delete, because removeDesktopShortcut looks
+ * for the *current* label and finds nothing. The user is left with an icon whose name
+ * describes neither what it does nor a preset that exists.
+ *
+ * Only an icon that is really there is moved. Writing one here for a preset the user
+ * never put on the desktop would be inventing a shortcut out of a rename.
+ */
+function followRename(before, after) {
+  if (!before || !after || before.label === after.label) return;
+  const dir = desktopDir();
+  if (!dir) return;
+  try {
+    if (!fs.existsSync(path.join(dir, launchpad.shortcutFileName(before.label)))) return;
+  } catch {
+    return;
+  }
+  launchpad.removeDesktopShortcut(before, { desktopDir: dir });
+  launchpad.writeDesktopShortcut(after, {
+    desktopDir: dir,
+    launchDir: presetLaunchDir(),
+    launcher,
+    iconPath: shortcutIconPath(),
+    node: launcherNode(),
+  });
+}
 
 ipcMain.handle('delete-preset', (_e, id) => {
   const cfg = loadConfig();
@@ -1214,6 +1260,9 @@ ipcMain.handle('delete-preset', (_e, id) => {
   // A desktop icon left pointing at a deleted preset would fail on click, so it
   // goes too. Best-effort: the preset is gone either way.
   if (gone) launchpad.removeDesktopShortcut(gone, { desktopDir: desktopDir() });
+  // And the launch pair with it. Left behind, it is what makes a stray icon keep
+  // *working* rather than failing — a deleted preset that still starts sessions.
+  launchpad.removeLaunchFiles(id, { launchDir: presetLaunchDir() });
   if (win) win.webContents.send('config-changed', cfg);
   return { ok: true };
 });
@@ -1346,7 +1395,9 @@ function registerPresetShortcuts() {
     try {
       ok = globalShortcut.register(preset.accelerator, () => {
         try {
-          launcher.launch(preset, { node: launcherNode() });
+          // launchSession, not launcher.launch: a hotkey has to pre-accept the trust
+          // dialog exactly like the button does, or the two routes disagree.
+          launchSession(preset);
         } catch {
           /* the window it would have opened is the error report */
         }
