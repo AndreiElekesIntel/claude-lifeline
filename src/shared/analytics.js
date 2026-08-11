@@ -38,7 +38,7 @@ const { costOf } = require('./pricing');
 const IDLE_GAP_MS = 15 * 60_000;
 
 /** Cache format version. A bump invalidates every entry rather than misreading it. */
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 
 /* ============================== transcripts ============================= */
 
@@ -147,6 +147,15 @@ function summariseTranscript(entry, pricingOverrides) {
     return null;
   }
 
+  /**
+   * Claude Code appends several assistant lines for one API response while a turn
+   * streams — text, then tool calls, often each carrying the same `message.id` and
+   * overlapping usage. Summing every line double-counts the turn; the last line for
+   * each id is the final meter reading, which matches what the statusline shows.
+   */
+  const usageByMessageId = new Map();
+  const unkeyedUsage = [];
+
   let prevAt = null;
   for (const line of raw.split('\n')) {
     if (!line || line[0] !== '{') continue;
@@ -198,19 +207,26 @@ function summariseTranscript(entry, pricingOverrides) {
       continue;
     }
 
-    out.assistantMessages += 1;
     const msg = d.message;
     if (!msg || typeof msg !== 'object') continue;
     if (msg.model) out.model = String(msg.model);
 
     const u = msg.usage;
     if (!u) continue;
+    const mid = msg.id ? String(msg.id) : '';
+    if (mid) usageByMessageId.set(mid, { model: msg.model, usage: u });
+    else unkeyedUsage.push({ model: msg.model, usage: u });
+  }
+
+  const billable = [...usageByMessageId.values(), ...unkeyedUsage];
+  out.assistantMessages = billable.length;
+  for (const { model, usage: u } of billable) {
     out.tokens.input += Number(u.input_tokens) || 0;
     out.tokens.output += Number(u.output_tokens) || 0;
     out.tokens.cacheWrite += Number(u.cache_creation_input_tokens) || 0;
     out.tokens.cacheRead += Number(u.cache_read_input_tokens) || 0;
 
-    const { usd, known } = costOf(u, msg.model, pricingOverrides);
+    const { usd, known } = costOf(u, model, pricingOverrides);
     out.costUsd += usd;
     if (!known) out.estimatedRates = true;
   }
