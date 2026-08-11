@@ -197,6 +197,55 @@ test('cache reads are priced far below fresh input', () => {
   assert.ok(asCacheRead * 5 < asInput, 'cache reads must be much cheaper than input');
 });
 
+test('streaming snapshots for one API message are billed once', () => {
+  reset();
+  const start = Date.parse('2026-03-15T12:00:00Z');
+  const dir = path.join(projectsDir(), 'proj-a');
+  fs.mkdirSync(dir, { recursive: true });
+  const msgId = 'msg_streaming_dup';
+  const lines = [
+    JSON.stringify({ type: 'user', timestamp: new Date(start).toISOString(), cwd: 'C:\\work\\proj-a', message: { role: 'user', content: 'go' } }),
+    // Partial line: small usage, same message id as the final tool-use line below.
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date(start + 1000).toISOString(),
+      cwd: 'C:\\work\\proj-a',
+      message: {
+        id: msgId,
+        model: 'claude-opus-5',
+        usage: { input_tokens: 2, output_tokens: 1, cache_creation_input_tokens: 40_000, cache_read_input_tokens: 0 },
+      },
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date(start + 2000).toISOString(),
+      cwd: 'C:\\work\\proj-a',
+      message: {
+        id: msgId,
+        model: 'claude-opus-5',
+        usage: { input_tokens: 2, output_tokens: 150, cache_creation_input_tokens: 40_000, cache_read_input_tokens: 0 },
+      },
+    }),
+  ];
+  fs.writeFileSync(path.join(dir, 'stream-dup.jsonl'), `${lines.join('\n')}\n`, 'utf8');
+
+  const { sessions } = analytics.scanSessions(null);
+  const s = sessions.find((x) => x.sessionId === 'stream-dup');
+  const once = pricing.costOf(
+    { input_tokens: 2, output_tokens: 150, cache_creation_input_tokens: 40_000, cache_read_input_tokens: 0 },
+    'claude-opus-5',
+    null
+  ).usd;
+  const twice = once + pricing.costOf(
+    { input_tokens: 2, output_tokens: 1, cache_creation_input_tokens: 40_000, cache_read_input_tokens: 0 },
+    'claude-opus-5',
+    null
+  ).usd;
+  assert.equal(s.costUsd, once, 'the last snapshot for a message id is the billable one');
+  assert.ok(twice > once * 1.5, 'fixture would have overstated badly if both snapshots were summed');
+  assert.equal(s.tokens.output, 150);
+});
+
 test('model ids match on longest prefix, so a dated id is not mispriced', () => {
   // 'claude-opus-4' must not swallow 'claude-opus-4-8': the rate halved at 4.5.
   assert.equal(pricing.ratesFor('claude-opus-4-8').rates.output, 25);
